@@ -71,9 +71,27 @@ Remaining (future work):
 - Extend migration to multi-host P2P (Task 12) once network lands.
 - Broader multi-organism convergence tests and minor heuristic tuning as the ecosystem expands.
 
-### 🟡 Task 6: Multi-Organism Interactions
-File: genesis/ecosystem.py
-Status: TODO
+### 🔵 Task 6: Multi-Organism Interactions
+File: genesis/interactions.py (lightweight), genesis/evolution.py (sensors/drives integration)
+Status: PARTIAL (passes initial tests)
+
+Implemented so far:
+- Region grouping and competition hinting: organisms are grouped by current_region; a region population hint is set per organism and consumed by the brain as competition_local sensor (via Organism._compute_brain_drives()).
+- Teaching within region: organisms with sufficient insights (>=5) probabilistically teach neighbors; this boosts the student's foraging_success_rate slightly and leaves a memory hint; events are sent to doom_feed.
+- Trade lead sharing within region: organisms with good_food_memories post their best recent lead to the shared trade_board; hint-only leads supported; events are sent to doom_feed.
+- Test coverage: test_task6_interactions.py validates region grouping, trade posting, and that at least one teaching event occurs in-region.
+
+Remaining to complete Task 6:
+- Integrate region interactions into the main evolution loop so they run periodically without tests invoking them directly.
+- Make interactions region-aware for trade consumption (e.g., prefer leads from the same region; optionally per-region trade boards or regional filtering when consuming leads).
+- Add light energy/social accounting: small energy cost for teaching; social_interactions increment for both parties; optional cooperation/teach actuator influence on probability and effect size.
+- Expand competition hint: blend region population with ecosystem scarcity and type availability; surface an optional _region_competition attribute and doom_feed summaries.
+- Deterministic hooks for tests: small env flags to force higher teaching probability in CI when needed without affecting production dynamics.
+
+Acceptance criteria to mark Task 6 done:
+- Interactions are scheduled in the evolution loop and observable via doom_feed.
+- Region-local teaching and trade measurably influence subsequent foraging behavior and success of nearby organisms.
+- Unit tests cover: region grouping stats, at least one teaching event over two interaction ticks, at least one lead posted, and consumption preference for local leads.
 
 ### 🟡 Task 7: Social Learning Between Organisms
 File: genesis/ecosystem.py

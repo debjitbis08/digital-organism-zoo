@@ -1,0 +1,146 @@
+"""
+Multi-Organism Interactions (Task 6)
+
+Lightweight, region-local interactions that leverage existing drives and data:
+- Teaching within a region when teachers have sufficient insights
+- Trading leads within a region from organisms with good food memories
+- Competition metric per region to influence organisms' sensor map
+
+These functions are intentionally small and dependency-light so they can be
+expanded later and integrated with ecosystem scheduling.
+"""
+
+from typing import List, Dict, Any
+import random
+
+try:
+    # Trade board singleton from evolution module
+    from genesis.evolution import trade_board, Capability
+except Exception:
+    trade_board = None
+    Capability = None
+
+
+def run_region_interactions(organisms: List, ecosystem_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Process simple region-local interactions between organisms.
+
+    - Groups organisms by current_region (default if missing)
+    - Sets a competition hint on organisms for use by brain sensors
+    - Performs teaching and trade sharing in-region
+
+    Returns a summary dict for observability/testing.
+    """
+    # Group by region
+    regions: Dict[str, List] = {}
+    for o in organisms:
+        region = getattr(o, 'current_region', 'default')
+        regions.setdefault(region, []).append(o)
+
+    summary = {'regions': {}, 'teaching_events': 0, 'trade_leads': 0}
+
+    for region, group in regions.items():
+        # Update per-organism regional competition hint (used by sensors)
+        pop = len(group)
+        for o in group:
+            try:
+                o._region_population = pop
+            except Exception:
+                pass
+
+        # Teaching: teachers with >=5 insights teach one student
+        # Bias chance by 'teach' actuator or social drive if available
+        teachers = []
+        for o in group:
+            kb = getattr(o, 'knowledge_base', None)
+            if kb and kb.get_knowledge_summary().get('total_insights', 0) >= 5 and o.energy > 20:
+                teachers.append(o)
+        for t in teachers:
+            # pick a student with fewer capabilities or fewer insights
+            candidates = []
+            for s in group:
+                if s is t:
+                    continue
+                s_kb = getattr(s, 'knowledge_base', None)
+                s_ins = s_kb.get_knowledge_summary().get('total_insights', 0) if s_kb else 0
+                t_ins = t.knowledge_base.get_knowledge_summary().get('total_insights', 0)
+                if s_ins < t_ins or len(getattr(s, 'capabilities', [])) < len(getattr(t, 'capabilities', [])):
+                    candidates.append(s)
+            if not candidates:
+                continue
+            # Probability influenced by drives and knowledge gap
+            drive = 0.0
+            try:
+                drive = getattr(t, '_brain_drives', {}).get('teach', 0.0) or getattr(t, '_brain_drives', {}).get('social', 0.0)
+            except Exception:
+                pass
+            # Knowledge differential increases likelihood
+            gap_bonus = 0.0
+            try:
+                avg_ins = sum((getattr(c, 'knowledge_base', None).get_knowledge_summary().get('total_insights', 0)
+                               if getattr(c, 'knowledge_base', None) else 0) for c in candidates) / max(1, len(candidates))
+                t_ins = t.knowledge_base.get_knowledge_summary().get('total_insights', 0)
+                if t_ins > avg_ins:
+                    gap_bonus = min(0.25, 0.03 * (t_ins - avg_ins))
+            except Exception:
+                pass
+            prob = min(0.95, 0.35 + 0.5 * drive + gap_bonus)
+            if random.random() < prob:
+                student = random.choice(candidates)
+                # Teaching effect: slight boost to student's foraging success and memory
+                try:
+                    if not hasattr(student, 'foraging_success_rate'):
+                        student.foraging_success_rate = 0.4
+                    student.foraging_success_rate = min(0.9, student.foraging_success_rate + 0.05)
+                    # Leave a hint memory
+                    if not hasattr(student, 'memory'):
+                        student.memory = []
+                    student.memory.append(f"learned_from_{t.id}")
+                    # Light social accounting and small energy cost
+                    try:
+                        t.social_interactions = getattr(t, 'social_interactions', 0) + 1
+                        student.social_interactions = getattr(student, 'social_interactions', 0) + 1
+                        t.energy = max(5, getattr(t, 'energy', 0) - 2)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                summary['teaching_events'] += 1
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('teaching', f"{t.id} taught {student.id} in {region}", 2, {'organism': t.id})
+                except Exception:
+                    pass
+
+        # Trade: share best local lead from recent memories
+        for o in group:
+            if trade_board is None:
+                break
+            # Preference by trade drive
+            drive = getattr(o, '_brain_drives', {}).get('trade', 0.0)
+            if drive < 0.5 and random.random() > 0.1:
+                continue
+            mems = getattr(o, 'good_food_memories', []) or []
+            if not mems:
+                continue
+            best = max(mems[-5:], key=lambda m: m.get('energy_gained', 0.0))
+            try:
+                from data_sources.harvesters import DataType
+                ft = best.get('food_type')
+                if isinstance(ft, DataType):
+                    trade_board.post_lead(o.id, ft, best.get('source', region), best.get('energy_gained', 0.0), region=region)
+                    summary['trade_leads'] += 1
+                else:
+                    # hint only
+                    trade_board.post_lead(o.id, None, region, 0.0, hint='prefer_structured', region=region)
+                    summary['trade_leads'] += 1
+                # Social accounting for trade interaction
+                try:
+                    o.social_interactions = getattr(o, 'social_interactions', 0) + 1
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        summary['regions'][region] = {'population': pop}
+
+    return summary

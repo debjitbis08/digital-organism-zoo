@@ -397,7 +397,7 @@ class _TradeBoard:
         self.max_items = max_items
         self.leads: List[Dict[str, Any]] = []
 
-    def post_lead(self, organism_id: str, food_type, source: str, score: float = 1.0, hint: Optional[str] = None):
+    def post_lead(self, organism_id: str, food_type, source: str, score: float = 1.0, hint: Optional[str] = None, region: Optional[str] = None):
         try:
             entry = {
                 'organism': organism_id,
@@ -406,13 +406,15 @@ class _TradeBoard:
                 'score': float(score),
                 'ts': time.time(),
                 'hint': hint or '',
+                'region': region or '',
             }
             self.leads.append(entry)
             if len(self.leads) > self.max_items:
                 self.leads = self.leads[-self.max_items:]
             from genesis.stream import doom_feed
             kind = getattr(food_type, 'value', str(food_type)) if food_type is not None else (hint or 'hint')
-            doom_feed.add('lead', f"{organism_id} posted lead: {kind} from {source}", 1, {'organism': organism_id})
+            region_tag = f" [{region}]" if region else ''
+            doom_feed.add('lead', f"{organism_id} posted lead: {kind} from {source}{region_tag}", 1, {'organism': organism_id})
         except Exception:
             pass
 
@@ -843,8 +845,12 @@ class Organism:
             # Type-specific scarcity proxies
             sensor_map['scarcity_structured'] = max(0.0, min(1.0, 1.0 - availability_structured))
             sensor_map['scarcity_code'] = max(0.0, min(1.0, 1.0 - availability_code))
-            # proxy for competition/pressure (reuse scarcity for now)
-            sensor_map['competition_local'] = max(0.0, min(1.0, scarcity))
+            # Competition/pressure: blend scarcity with regional population size if available
+            comp = scarcity
+            if hasattr(self, '_region_population'):
+                # Map 1..6+ population to ~0..1
+                comp = max(comp, max(0.0, min(1.0, (float(self._region_population) - 1.0) / 5.0)))
+            sensor_map['competition_local'] = max(0.0, min(1.0, comp))
         # Metabolic/health
         if nutrition_system and 'metabolic_tracker' in nutrition_system:
             prof = nutrition_system['metabolic_tracker'].metabolic_profiles.get(self.id)
@@ -982,7 +988,10 @@ class Organism:
             if drives.get('trade', 0.0) > 0.6:
                 leads = trade_board.get_recent_leads()
                 if leads:
-                    last = leads[-1]
+                    # Prefer region-local leads if available
+                    my_region = getattr(self, 'current_region', None)
+                    local = [L for L in leads if my_region and L.get('region') == my_region]
+                    last = (local[-1] if local else leads[-1])
                     lt = last.get('type')
                     try:
                         if lt is not None:
@@ -1597,7 +1606,7 @@ class Organism:
                     from data_sources.harvesters import DataType
                     ft = best.get('food_type')
                     if isinstance(ft, DataType):
-                        trade_board.post_lead(self.id, ft, best.get('source', 'unknown'), best.get('energy_gained', 0.0))
+                        trade_board.post_lead(self.id, ft, best.get('source', 'unknown'), best.get('energy_gained', 0.0), region=getattr(self, 'current_region', None))
                     else:
                         # Fallback: just announce
                         from genesis.stream import doom_feed
@@ -1642,7 +1651,7 @@ class Organism:
                 hint = 'prefer_code'
             if hint:
                 # Post a hint-only lead (no specific type/source)
-                trade_board.post_lead(self.id, None, 'teaching', 0.0, hint=hint)
+                trade_board.post_lead(self.id, None, 'teaching', 0.0, hint=hint, region=getattr(self, 'current_region', None))
         except Exception:
             pass
     
@@ -2526,6 +2535,19 @@ def run_indefinite_zoo(config: dict = None):
                 # Calculate fitness and apply cultural evolution
                 eco_stats = data_ecosystem.get_ecosystem_stats()
                 apply_fitness_culture(organism, eco_stats, fitness_culture_system)
+
+            # Region-local interactions (Task 6): teaching and trade
+            try:
+                if day % 2 == 0:  # light periodicity to limit noise
+                    from genesis.interactions import run_region_interactions
+                    inter_summary = run_region_interactions(organisms, eco_stats)
+                    # Surface a compact summary occasionally
+                    if inter_summary and (inter_summary.get('teaching_events', 0) > 0 or inter_summary.get('trade_leads', 0) > 0):
+                        from genesis.stream import doom_feed
+                        regions = ','.join(f"{r}:{d['population']}" for r, d in inter_summary.get('regions', {}).items())
+                        doom_feed.add('interactions', f"teaching={inter_summary.get('teaching_events',0)}, trade={inter_summary.get('trade_leads',0)} [{regions}]", 1)
+            except Exception:
+                pass
             
             # Check for reproduction opportunities
             reproduction_candidates = [org for org in organisms if org.can_reproduce()]
