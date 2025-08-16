@@ -1,0 +1,463 @@
+# Real Data Harvesting System for Digital Organisms
+# Provides actual "food" sources instead of mock data
+
+import json
+import time
+import threading
+import requests
+import feedparser
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Iterator
+from dataclasses import dataclass
+from enum import Enum
+import hashlib
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import xml.etree.ElementTree as ET
+
+class DataType(Enum):
+    """Types of data that organisms can consume"""
+    SIMPLE_TEXT = "simple_text"      # Plain text, strings
+    STRUCTURED_JSON = "structured_json"  # JSON, YAML
+    XML_DATA = "xml_data"            # XML, RSS, ATOM
+    CODE = "code"                    # Programming code
+    REAL_TIME_STREAM = "real_time_stream"  # Continuous data
+    BINARY = "binary"                # Images, files (advanced)
+
+@dataclass
+class DataMorsel:
+    """A piece of data that organisms can eat"""
+    data_type: DataType
+    content: str
+    size: int
+    source: str
+    timestamp: float
+    energy_value: int
+    freshness: float = 1.0  # Decreases over time
+    difficulty: int = 1     # Processing complexity
+    unique_id: str = None
+    
+    def __post_init__(self):
+        if self.unique_id is None:
+            self.unique_id = hashlib.md5(
+                f"{self.content}{self.timestamp}".encode()
+            ).hexdigest()[:8]
+    
+    def decay_freshness(self, time_passed: float):
+        """Food gets stale over time"""
+        decay_rate = 0.1  # 10% per hour
+        self.freshness = max(0.0, self.freshness - (decay_rate * time_passed / 3600))
+        self.energy_value = int(self.energy_value * self.freshness)
+    
+    def is_consumable_by_capabilities(self, capabilities: set) -> bool:
+        """Check if organism has capabilities to digest this data"""
+        from genesis.evolution import Capability
+        
+        if self.data_type == DataType.SIMPLE_TEXT:
+            return Capability.EAT_TEXT in capabilities
+        elif self.data_type == DataType.STRUCTURED_JSON:
+            return Capability.PATTERN_MATCH in capabilities
+        elif self.data_type == DataType.CODE:
+            return Capability.ABSTRACT in capabilities
+        elif self.data_type == DataType.XML_DATA:
+            return Capability.PATTERN_MATCH in capabilities
+        else:
+            return False
+
+class RSSFeedHarvester:
+    """Harvests data from RSS feeds"""
+    
+    def __init__(self, feed_urls: List[str]):
+        self.feed_urls = feed_urls
+        self.seen_entries = set()
+        self.last_check = {}
+        
+    def harvest(self) -> List[DataMorsel]:
+        """Fetch new entries from RSS feeds"""
+        morsels = []
+        
+        for url in self.feed_urls:
+            try:
+                feed = feedparser.parse(url)
+                
+                for entry in feed.entries:
+                    entry_id = getattr(entry, 'id', entry.link)
+                    
+                    if entry_id not in self.seen_entries:
+                        self.seen_entries.add(entry_id)
+                        
+                        # Create morsel from RSS entry
+                        content = f"Title: {entry.title}\nSummary: {getattr(entry, 'summary', '')}"
+                        
+                        morsel = DataMorsel(
+                            data_type=DataType.XML_DATA,
+                            content=content,
+                            size=len(content),
+                            source=f"RSS:{feed.feed.title}",
+                            timestamp=time.time(),
+                            energy_value=15,  # RSS feeds are nutritious
+                            difficulty=2
+                        )
+                        morsels.append(morsel)
+                        
+            except Exception as e:
+                print(f"RSS harvest error for {url}: {e}")
+                
+        return morsels
+
+class FileSystemHarvester(FileSystemEventHandler):
+    """Harvests data from file system changes"""
+    
+    def __init__(self, watch_paths: List[str]):
+        super().__init__()
+        self.watch_paths = watch_paths
+        self.observer = Observer()
+        self.harvested_morsels = []
+        self.file_extensions = {
+            '.txt': DataType.SIMPLE_TEXT,
+            '.json': DataType.STRUCTURED_JSON,
+            '.xml': DataType.XML_DATA,
+            '.py': DataType.CODE,
+            '.js': DataType.CODE,
+            '.md': DataType.SIMPLE_TEXT,
+        }
+        
+    def start_watching(self):
+        """Start monitoring file system"""
+        for path in self.watch_paths:
+            if os.path.exists(path):
+                self.observer.schedule(self, path, recursive=True)
+        self.observer.start()
+        
+    def stop_watching(self):
+        """Stop monitoring file system"""
+        self.observer.stop()
+        self.observer.join()
+        
+    def on_modified(self, event):
+        """Handle file modification events"""
+        if not event.is_directory:
+            self._process_file(event.src_path, "modified")
+            
+    def on_created(self, event):
+        """Handle file creation events"""
+        if not event.is_directory:
+            self._process_file(event.src_path, "created")
+    
+    def _process_file(self, file_path: str, event_type: str):
+        """Process a file change into a data morsel"""
+        try:
+            path = Path(file_path)
+            extension = path.suffix.lower()
+            
+            if extension in self.file_extensions:
+                # Read file content (with size limit)
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(10000)  # Limit to 10KB
+                
+                data_type = self.file_extensions[extension]
+                
+                # Calculate energy value based on type and size
+                base_energy = {
+                    DataType.SIMPLE_TEXT: 5,
+                    DataType.STRUCTURED_JSON: 12,
+                    DataType.XML_DATA: 10,
+                    DataType.CODE: 25
+                }.get(data_type, 5)
+                
+                morsel = DataMorsel(
+                    data_type=data_type,
+                    content=content,
+                    size=len(content),
+                    source=f"File:{path.name}",
+                    timestamp=time.time(),
+                    energy_value=base_energy,
+                    difficulty=2 if data_type == DataType.CODE else 1
+                )
+                
+                self.harvested_morsels.append(morsel)
+                print(f"📁 Harvested {data_type.value} from {path.name} ({event_type})")
+                
+        except Exception as e:
+            print(f"File processing error for {file_path}: {e}")
+    
+    def get_harvested_morsels(self) -> List[DataMorsel]:
+        """Get and clear harvested morsels"""
+        morsels = self.harvested_morsels.copy()
+        self.harvested_morsels.clear()
+        return morsels
+
+class APIHarvester:
+    """Harvests data from simple APIs"""
+    
+    def __init__(self):
+        self.api_endpoints = [
+            {
+                'url': 'https://api.github.com/events',
+                'name': 'GitHub Events',
+                'energy': 20,
+                'type': DataType.STRUCTURED_JSON
+            },
+            {
+                'url': 'https://httpbin.org/json',
+                'name': 'HTTPBin Test',
+                'energy': 10,
+                'type': DataType.STRUCTURED_JSON
+            },
+            # Add more APIs as needed
+        ]
+        self.request_timeout = 5
+        self.last_requests = {}
+        
+    def harvest(self) -> List[DataMorsel]:
+        """Fetch data from APIs"""
+        morsels = []
+        
+        for endpoint in self.api_endpoints:
+            # Rate limiting - max 1 request per 5 minutes per endpoint
+            if endpoint['url'] in self.last_requests:
+                if time.time() - self.last_requests[endpoint['url']] < 300:
+                    continue
+                    
+            try:
+                response = requests.get(
+                    endpoint['url'], 
+                    timeout=self.request_timeout,
+                    headers={'User-Agent': 'DigitalOrganismZoo/1.0'}
+                )
+                
+                if response.status_code == 200:
+                    content = response.text
+                    
+                    morsel = DataMorsel(
+                        data_type=endpoint['type'],
+                        content=content,
+                        size=len(content),
+                        source=f"API:{endpoint['name']}",
+                        timestamp=time.time(),
+                        energy_value=endpoint['energy'],
+                        difficulty=2
+                    )
+                    
+                    morsels.append(morsel)
+                    self.last_requests[endpoint['url']] = time.time()
+                    print(f"🌐 Harvested from {endpoint['name']}")
+                    
+            except Exception as e:
+                print(f"API harvest error for {endpoint['url']}: {e}")
+                
+        return morsels
+
+class DataEcosystem:
+    """Manages all data sources and provides unified feeding interface"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        default_config = self._default_config()
+        if config:
+            default_config.update(config)
+        self.config = default_config
+        
+        # Initialize harvesters
+        self.rss_harvester = RSSFeedHarvester(self.config['rss_feeds'])
+        self.file_harvester = FileSystemHarvester(self.config['watch_paths'])
+        self.api_harvester = APIHarvester()
+        
+        # Food storage
+        self.available_food = []
+        self.consumed_food = []
+        self.food_scarcity = 1.0  # 1.0 = abundant, 0.0 = scarce
+        
+        # Start file watching
+        self.file_harvester.start_watching()
+        
+        # Harvesting thread
+        self.harvesting = True
+        self.harvest_thread = threading.Thread(target=self._harvest_loop, daemon=True)
+        self.harvest_thread.start()
+        
+    def _default_config(self) -> Dict[str, Any]:
+        """Default configuration for data ecosystem"""
+        return {
+            'rss_feeds': [
+                'https://feeds.bbci.co.uk/news/rss.xml',
+                'https://rss.cnn.com/rss/edition.rss',
+                'https://hnrss.org/frontpage',  # Hacker News
+            ],
+            'watch_paths': [
+                os.path.expanduser('~/Documents'),
+                os.path.expanduser('~/Downloads'),
+                '/tmp'  # Temporary files
+            ],
+            'harvest_interval': 300,  # 5 minutes
+            'max_food_storage': 1000,
+            'scarcity_threshold': 100
+        }
+    
+    def _harvest_loop(self):
+        """Background harvesting loop"""
+        while self.harvesting:
+            try:
+                # Harvest from all sources
+                new_morsels = []
+                
+                # RSS feeds
+                new_morsels.extend(self.rss_harvester.harvest())
+                
+                # File system
+                new_morsels.extend(self.file_harvester.get_harvested_morsels())
+                
+                # APIs (less frequent)
+                if time.time() % 600 < 10:  # Every 10 minutes
+                    new_morsels.extend(self.api_harvester.harvest())
+                
+                # Add to food storage
+                self.available_food.extend(new_morsels)
+                
+                # Manage food storage size
+                if len(self.available_food) > self.config['max_food_storage']:
+                    # Remove oldest food
+                    self.available_food = self.available_food[-self.config['max_food_storage']:]
+                
+                # Update scarcity
+                food_count = len(self.available_food)
+                if food_count < self.config['scarcity_threshold']:
+                    self.food_scarcity = food_count / self.config['scarcity_threshold']
+                else:
+                    self.food_scarcity = 1.0
+                
+                # Decay food freshness
+                current_time = time.time()
+                for morsel in self.available_food:
+                    time_passed = current_time - morsel.timestamp
+                    morsel.decay_freshness(time_passed)
+                
+                # Remove completely stale food
+                self.available_food = [m for m in self.available_food if m.freshness > 0.1]
+                
+                if new_morsels:
+                    print(f"🍽️  Harvested {len(new_morsels)} new morsels. "
+                          f"Total food: {len(self.available_food)}, "
+                          f"Scarcity: {self.food_scarcity:.2f}")
+                
+            except Exception as e:
+                print(f"Harvest loop error: {e}")
+            
+            time.sleep(self.config['harvest_interval'])
+    
+    def find_food_for_organism(self, organism_capabilities: set, preferences: Dict = None) -> Optional[DataMorsel]:
+        """Find suitable food for an organism based on its capabilities"""
+        
+        # Filter food by capabilities
+        suitable_food = [
+            morsel for morsel in self.available_food
+            if morsel.is_consumable_by_capabilities(organism_capabilities)
+        ]
+        
+        if not suitable_food:
+            return None
+        
+        # Apply preferences and scarcity
+        if preferences and 'preferred_types' in preferences:
+            preferred = [m for m in suitable_food if m.data_type in preferences['preferred_types']]
+            if preferred:
+                suitable_food = preferred
+        
+        # Sort by energy value and freshness
+        suitable_food.sort(key=lambda m: m.energy_value * m.freshness, reverse=True)
+        
+        # Apply scarcity - organism might not find food if scarce
+        if self.food_scarcity < 0.5 and len(suitable_food) > 0:
+            # Only give food sometimes when scarce
+            import random
+            if random.random() > self.food_scarcity:
+                return None
+        
+        # Return best food item
+        if suitable_food:
+            chosen_morsel = suitable_food[0]
+            self.available_food.remove(chosen_morsel)
+            self.consumed_food.append(chosen_morsel)
+            return chosen_morsel
+        
+        return None
+    
+    def get_ecosystem_stats(self) -> Dict[str, Any]:
+        """Get statistics about the data ecosystem"""
+        stats = {
+            'total_food_available': len(self.available_food),
+            'total_food_consumed': len(self.consumed_food),
+            'food_scarcity': self.food_scarcity,
+            'food_by_type': {},
+            'average_freshness': 0.0,
+            'total_energy_available': 0
+        }
+        
+        # Calculate food distribution
+        for morsel in self.available_food:
+            data_type = morsel.data_type.value
+            if data_type not in stats['food_by_type']:
+                stats['food_by_type'][data_type] = 0
+            stats['food_by_type'][data_type] += 1
+            stats['total_energy_available'] += morsel.energy_value
+        
+        # Calculate average freshness
+        if self.available_food:
+            stats['average_freshness'] = sum(m.freshness for m in self.available_food) / len(self.available_food)
+        
+        return stats
+    
+    def stop(self):
+        """Stop the data ecosystem"""
+        self.harvesting = False
+        self.file_harvester.stop_watching()
+        if self.harvest_thread.is_alive():
+            self.harvest_thread.join(timeout=5)
+
+# Example usage and testing
+if __name__ == "__main__":
+    print("🌱 Starting Digital Organism Data Ecosystem...")
+    
+    # Create data ecosystem
+    ecosystem = DataEcosystem()
+    
+    try:
+        # Simulate organism feeding
+        from genesis.evolution import Capability
+        
+        # Mock organism capabilities
+        basic_organism_caps = {Capability.SENSE_DATA, Capability.EAT_TEXT}
+        advanced_organism_caps = {Capability.SENSE_DATA, Capability.EAT_TEXT, 
+                                Capability.PATTERN_MATCH, Capability.ABSTRACT}
+        
+        print("\n🤖 Simulating organism feeding...")
+        
+        for i in range(10):
+            time.sleep(5)  # Wait for some data to be harvested
+            
+            # Try to feed basic organism
+            food = ecosystem.find_food_for_organism(basic_organism_caps)
+            if food:
+                print(f"🍽️  Basic organism ate: {food.data_type.value} "
+                      f"({food.energy_value} energy) from {food.source}")
+            else:
+                print("😋 Basic organism found no suitable food")
+            
+            # Try to feed advanced organism
+            food = ecosystem.find_food_for_organism(advanced_organism_caps)
+            if food:
+                print(f"🍽️  Advanced organism ate: {food.data_type.value} "
+                      f"({food.energy_value} energy) from {food.source}")
+            else:
+                print("😋 Advanced organism found no suitable food")
+            
+            # Show ecosystem stats
+            stats = ecosystem.get_ecosystem_stats()
+            print(f"📊 Ecosystem: {stats['total_food_available']} food available, "
+                  f"scarcity: {stats['food_scarcity']:.2f}")
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping ecosystem...")
+    finally:
+        ecosystem.stop()
+        print("✅ Data ecosystem stopped")

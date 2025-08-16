@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  ecosystem:
+    build: .
+    container_name: organism-zoo
+    ports:
+      - "8080:8080" # Web interface
+      - "8081:8081" # Organism P2P network
+    volumes:
+      # Persistent evolution state
+      - organism-data:/app/shared_state
+      - organism-genomes:/app/organisms/genome_pool
+      # Allow local data feeding
+      - ${HOME}/Documents:/data/documents:ro
+      - ${HOME}/.organism_feeds:/data/feeds
+    environment:
+      - GENERATION_MODE=${MODE:-continue} # 'genesis' or 'continue'
+      - RESOURCE_LIMIT=${RESOURCES:-low} # low/medium/high
+      - NETWORK_MODE=${NETWORK:-local} # local/distributed
+    restart: unless-stopped
+    mem_limit: 2g # Prevent runaway organisms
+    cpus: "1.0" # CPU limit
+
+  # Optional: Distributed node
+  node:
+    image: ghcr.io/yourusername/organism-zoo:latest
+    ports:
+      - "8082:8081"
+    environment:
+      - MODE=join
+      - PARENT_NODE=${PARENT_NODE:-ecosystem:8081}
+    depends_on:
+      - ecosystem
+
+volumes:
+  organism-data:
+  organism-genomes:

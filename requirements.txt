@@ -1,0 +1,24 @@
+# Core
+numpy==1.24.0
+torch==2.0.0  # CPU version for compatibility
+ollama==0.1.0
+
+# Ecosystem
+sqlalchemy==2.0.0
+redis==5.0.0  # For shared memory between organisms
+
+# Data harvesting
+feedparser==6.0.10
+beautifulsoup4==4.12.0
+watchdog==3.0.0  # Monitor local files
+requests==2.31.0  # API harvesting
+
+# Web interface
+flask==3.0.0
+flask-socketio==5.3.0  # Real-time updates
+
+# P2P networking
+libp2p==0.2.0  # Organism communication
+
+# Optimization
+numba==0.58.0  # JIT compilation for organism code

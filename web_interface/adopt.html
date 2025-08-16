@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Digital Organism Zoo - Adopt Your Organism</title>
+    <style>
+      body {
+        font-family: monospace;
+        background: #0a0a0a;
+        color: #00ff00;
+      }
+      .organism {
+        border: 1px solid #00ff00;
+        padding: 10px;
+        margin: 10px;
+        display: inline-block;
+      }
+      .stats {
+        font-size: 10px;
+      }
+      .dna {
+        color: #0088ff;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🧬 Digital Organism Zoo</h1>
+    <h2>Generation: <span id="generation">Loading...</span></h2>
+
+    <div id="organisms"></div>
+
+    <script>
+      // Connect to organism ecosystem
+      const ws = new WebSocket("ws://localhost:8080/stream");
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        updateOrganisms(data.organisms);
+      };
+
+      function adopt(organismId) {
+        fetch("/adopt", {
+          method: "POST",
+          body: JSON.stringify({ id: organismId }),
+        });
+      }
+    </script>
+  </body>
+</html>
