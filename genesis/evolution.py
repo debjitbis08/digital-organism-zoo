@@ -429,16 +429,43 @@ class Organism:
             'data': f"environment_data_{random.randint(1, 100)}"
         }
     
-    def process_environment(self, environment):
+    def process_environment(self, environment, nutrition_system=None):
         """Handle environment that organism can process"""
         if environment['type'] == 'real_food':
-            # Process real data morsel
+            # Process real data morsel with enhanced nutrition
             morsel = environment['morsel']
-            energy_gained = morsel.energy_value
-            self.energy += energy_gained
+            
+            if nutrition_system:
+                # Use enhanced nutrition system
+                from genesis.nutrition import process_organism_feeding
+                feeding_result = process_organism_feeding(self, morsel, nutrition_system)
+                effects = feeding_result['effects']
+                energy_gained = effects['energy_gained']
+                
+                # Show detailed feeding info
+                print(f"🍽️  Organism {self.id} ate {morsel.data_type.value} from {morsel.source} "
+                      f"(+{energy_gained} energy)")
+                
+                if effects['learning_boost'] > 0:
+                    print(f"   📚 Learning boost: +{effects['learning_boost']:.2f}")
+                if effects['creativity_boost'] > 0:
+                    print(f"   🎨 Creativity boost: +{effects['creativity_boost']:.2f}")
+                if effects['toxicity_damage'] > 0:
+                    print(f"   ☠️  Toxicity damage: -{effects['toxicity_damage']:.2f}")
+                
+                # Show recommendations occasionally
+                if random.random() < 0.1:  # 10% chance
+                    recommendations = feeding_result['recommendations']
+                    if recommendations:
+                        print(f"   💡 Dietary tip: {random.choice(recommendations)}")
+            else:
+                # Fallback to simple system
+                energy_gained = morsel.energy_value
+                self.energy += energy_gained
+                print(f"🍽️  Organism {self.id} ate {morsel.data_type.value} from {morsel.source} (+{energy_gained} energy)")
+            
             self.memory.append(f"ate_{morsel.data_type.value}:{morsel.source}")
             self.consecutive_failures = 0
-            print(f"🍽️  Organism {self.id} ate {morsel.data_type.value} from {morsel.source} (+{energy_gained} energy)")
             
         elif environment['type'] == 'simple_data':
             self.energy += 5  # Gain energy from simple data
@@ -537,7 +564,7 @@ class Organism:
         """Generate hypothesis about environment"""
         return f"hypothesis_about_{environment['type']}"
     
-    def live(self, data_ecosystem=None):
+    def live(self, data_ecosystem=None, nutrition_system=None):
         """One moment of existence"""
         
         self.age += 1
@@ -548,10 +575,10 @@ class Organism:
         
         # Can I handle this?
         if self.can_process(environment):
-            self.process_environment(environment)
+            self.process_environment(environment, nutrition_system)
         else:
             # Failed to process - track failure and maybe learn to ask for help
-            self.process_environment(environment)  # This will increment frustration
+            self.process_environment(environment, nutrition_system)  # This will increment frustration
             
             # Check if organism should discover ASK_PARENT capability
             self.check_frustration_based_learning()
@@ -762,6 +789,7 @@ if __name__ == "__main__":
     
     try:
         from data_sources.harvesters import DataEcosystem
+        from genesis.nutrition import create_enhanced_nutrition_system
         
         # Create real data ecosystem
         print("📡 Creating data ecosystem...")
@@ -772,6 +800,10 @@ if __name__ == "__main__":
             'max_food_storage': 50
         })
         
+        # Create enhanced nutrition system
+        print("🧬 Creating enhanced nutrition system...")
+        nutrition_system = create_enhanced_nutrition_system()
+        
         # Create parent help system with economy
         parent_system = ParentHelp()
         
@@ -779,11 +811,15 @@ if __name__ == "__main__":
         organisms = [Organism(generation=0) for _ in range(3)]
         print(f"🐣 Born {len(organisms)} organisms")
         
-        # Live and evolve with real data
+        # Live and evolve with real data and enhanced nutrition
         for day in range(200):
-            # Process all organisms with real data ecosystem
+            # Update scarcity based on current ecosystem state
+            eco_stats = data_ecosystem.get_ecosystem_stats()
+            nutrition_system['scarcity_manager'].update_scarcity(eco_stats, len(organisms))
+            
+            # Process all organisms with real data ecosystem and nutrition
             for organism in organisms:
-                organism.live(data_ecosystem)
+                organism.live(data_ecosystem, nutrition_system)
             
             # Process batched help requests
             if day % 10 == 0:
@@ -805,9 +841,12 @@ if __name__ == "__main__":
                 
                 # Data ecosystem status
                 eco_stats = data_ecosystem.get_ecosystem_stats()
-                print(f"  🌍 Ecosystem: {eco_stats['total_food_available']} food available, "
-                      f"scarcity={eco_stats['food_scarcity']:.2f}")
+                scarcity_report = nutrition_system['scarcity_manager'].get_scarcity_report()
+                print(f"  🌍 Ecosystem: {eco_stats['total_food_available']} food available")
                 print(f"  🍯 Food types: {eco_stats['food_by_type']}")
+                print(f"  📉 Scarcity: {scarcity_report['scarcity_level']} "
+                      f"(global: {scarcity_report['global_scarcity']:.2f}, "
+                      f"competition: {scarcity_report['competition_pressure']:.2f})")
             
             # Remove dead organisms and evolve population
             initial_count = len(organisms)

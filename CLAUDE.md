@@ -31,18 +31,24 @@
 **Dependencies**: None
 **Completion Time**: 4 hours
 
-### 🔴 Task 2: Add Nutritional Values Per Data Type
+### ✅ Task 2: Add Nutritional Values Per Data Type
 **File**: `genesis/nutrition.py`
-**Status**: TODO  
+**Status**: COMPLETED
 **Description**: Different data types provide different energy
-- [ ] Simple text: 5 energy
-- [ ] Structured JSON: 10 energy (requires PATTERN_MATCH)
-- [ ] Code files: 20 energy (requires ABSTRACT)
-- [ ] Real-time streams: continuous feeding
-- [ ] Scarcity mechanics (limited food per source)
-- [ ] Competition system (multiple organisms, one food source)
-**Dependencies**: Task 1
-**Estimated Time**: 2-3 hours
+- [x] Simple text: 5 energy (simple carbs, fast decay)
+- [x] Structured JSON: 12 energy (complex carbs, learning boost)
+- [x] XML data: 10 energy (complex carbs, pattern matching)
+- [x] Code files: 25 energy (protein, creativity boost, addictive)
+- [x] Real-time streams: 15 energy (vitamins, low spoilage)
+- [x] Binary data: 30 energy (minerals, stable but toxic)
+- [x] Advanced scarcity mechanics with competition pressure
+- [x] Metabolic efficiency tracking
+- [x] Dietary recommendations system
+- [x] Nutritional categories (carbs, protein, vitamins, etc.)
+- [x] Organism state affects nutrition absorption
+- [x] Toxicity and addiction mechanics
+**Dependencies**: Task 1 ✅
+**Completion Time**: 3 hours
 
 ### 🔴 Task 3: Integrate Ollama LLM 
 **File**: `genesis/teacher.py`
