@@ -398,6 +398,17 @@ class Organism:
         self.intelligence = self.traits.learning_rate  # Link to existing trait
         self.consecutive_failures = 0
         
+        # Fitness and cultural attributes
+        self.current_fitness = 0.0
+        self.offspring_count = 0
+        self.successful_offspring = 0
+        self.parent_help_received = 0
+        self.unique_food_sources = set()
+        self.energy_efficiency = 1.0
+        self.organisms_taught = set()
+        self.known_stories = []
+        self.cultural_influence = 0.0
+        
         # Inherit from parent
         if parent_genome:
             self.inherit(parent_genome)
@@ -466,6 +477,13 @@ class Organism:
             
             self.memory.append(f"ate_{morsel.data_type.value}:{morsel.source}")
             self.consecutive_failures = 0
+            
+            # Track unique food sources for exploration fitness
+            self.unique_food_sources.add(morsel.source)
+            
+            # Calculate energy efficiency
+            energy_gained = effects.get('energy_gained', energy_gained) if nutrition_system else energy_gained
+            self.energy_efficiency = (self.energy_efficiency * 0.9) + (energy_gained / 20.0 * 0.1)
             
         elif environment['type'] == 'simple_data':
             self.energy += 5  # Gain energy from simple data
@@ -564,11 +582,19 @@ class Organism:
         """Generate hypothesis about environment"""
         return f"hypothesis_about_{environment['type']}"
     
-    def live(self, data_ecosystem=None, nutrition_system=None):
+    def live(self, data_ecosystem=None, nutrition_system=None, parent_care_system=None):
         """One moment of existence"""
         
         self.age += 1
         self.energy -= 1  # Constant drain
+        
+        # PARENT CARE: Check if parent should help BEFORE organism struggles
+        care_action = None
+        if parent_care_system:
+            care_action = parent_care_system.provide_care(self)
+            if care_action:
+                # Track parent help for fitness calculation
+                self.parent_help_received += 1
         
         # Try to survive
         environment = self.sense_environment(data_ecosystem)
@@ -587,8 +613,9 @@ class Organism:
             if self.has_capability(Capability.ASK_PARENT):
                 self.ask_for_help(environment)
             else:
-                # Struggle silently, building frustration
-                self.energy -= 3  # Extra energy cost for struggling
+                # Struggle silently, building frustration (but less if parent helped)
+                struggle_cost = 1 if care_action else 3  # Less struggle if parent helped
+                self.energy -= struggle_cost
         
         # Try to evolve
         if random.random() < 0.01:
@@ -713,28 +740,76 @@ class Organism:
         success_chance = self.traits.learning_rate * self.traits.creativity
         return random.random() < success_chance
     
-    def reproduce(self):
-        """Create offspring with mutations"""
+    def can_reproduce(self) -> bool:
+        """Check if organism meets reproduction criteria"""
+        # Basic requirements: energy + age + some capabilities
+        energy_ready = self.energy >= 120  # Reduced from 150
+        age_ready = self.age >= 80  # Minimum age for reproduction
+        capability_ready = len(self.capabilities) >= 3  # Need some capabilities
         
-        if self.energy < 150:
-            # Need excess energy to reproduce
-            if Capability.ASK_PARENT in self.capabilities:
-                self.parent_connection.child_asks_for_help(
-                    self,
-                    'want_reproduce',
-                    {'energy': self.energy}
-                )
+        return energy_ready and age_ready and capability_ready
+    
+    def find_mate(self, population) -> Optional['Organism']:
+        """Find suitable mate from population"""
+        potential_mates = [
+            org for org in population 
+            if (org != self and 
+                org.can_reproduce() and 
+                org.generation <= self.generation + 2 and  # Not too different generations
+                org.generation >= self.generation - 2)
+        ]
+        
+        if not potential_mates:
             return None
         
-        # Create child
-        child_genome = self.create_genome()
-        child = Organism(self.generation + 1, child_genome)
+        # Choose mate with highest fitness (fitness-based selection)
+        best_mate = max(potential_mates, key=lambda org: getattr(org, 'current_fitness', 0.5))
+        return best_mate
+    
+    def reproduce(self, mate=None, fitness_culture_system=None):
+        """Create offspring with mate using proper inheritance"""
         
-        # Teach child basics
+        if not self.can_reproduce():
+            return None
+        
+        if mate is None:
+            return None
+        
+        # Both parents pay energy cost
+        reproduction_cost = 40
+        if self.energy < reproduction_cost or mate.energy < reproduction_cost:
+            return None
+        
+        self.energy -= reproduction_cost
+        mate.energy -= reproduction_cost
+        
+        # Create offspring using inheritance system
+        if fitness_culture_system:
+            inheritance_system = fitness_culture_system['inheritance_system']
+            offspring_genome = inheritance_system.create_offspring(self, mate)
+        else:
+            # Fallback to simple inheritance
+            offspring_genome = {
+                'traits': {
+                    'learning_rate': (self.traits.learning_rate + mate.traits.learning_rate) / 2,
+                    'curiosity': (self.traits.curiosity + mate.traits.curiosity) / 2
+                },
+                'generation': max(self.generation, mate.generation) + 1
+            }
+        
+        # Create child
+        child = Organism(offspring_genome['generation'], offspring_genome)
+        
+        # Track reproductive success
+        self.offspring_count += 1
+        mate.offspring_count += 1
+        
+        # Teach child basics if capable
         if Capability.TEACH in self.capabilities:
             self.teach_offspring(child)
         
-        self.energy -= 50  # Cost of reproduction
+        print(f"👶 Reproduction: {self.id} + {mate.id} → {child.id} (gen {child.generation})")
+        
         return child
     
     def modify_own_code(self):
@@ -790,6 +865,10 @@ if __name__ == "__main__":
     try:
         from data_sources.harvesters import DataEcosystem
         from genesis.nutrition import create_enhanced_nutrition_system
+        from genesis.parent_care import create_parent_care_system
+        from genesis.fitness_culture import create_fitness_culture_system, apply_fitness_culture
+        from genesis.code_evolution import create_code_evolution_system
+        from genesis.persistence import create_persistence_system, auto_save_organisms
         
         # Create real data ecosystem
         print("📡 Creating data ecosystem...")
@@ -804,7 +883,23 @@ if __name__ == "__main__":
         print("🧬 Creating enhanced nutrition system...")
         nutrition_system = create_enhanced_nutrition_system()
         
-        # Create parent help system with economy
+        # Create fitness and cultural evolution system
+        print("🎭 Creating fitness and cultural evolution system...")
+        fitness_culture_system = create_fitness_culture_system()
+        
+        # Create code evolution system
+        print("🔧 Creating code evolution system...")
+        code_evolution_system = create_code_evolution_system()
+        
+        # Create persistence system
+        print("💾 Creating persistence system...")
+        persistence_system = create_persistence_system()
+        
+        # Create active parent care system WITH code evolution abilities
+        print("👨‍👩‍👧‍👦 Creating parent care system...")
+        parent_care_system = create_parent_care_system(code_evolution_system)
+        
+        # Create parent help system with economy (for advanced help)
         parent_system = ParentHelp()
         
         # Birth multiple organisms
@@ -812,14 +907,30 @@ if __name__ == "__main__":
         print(f"🐣 Born {len(organisms)} organisms")
         
         # Live and evolve with real data and enhanced nutrition
-        for day in range(200):
+        current_generation = 0
+        for day in range(300):
             # Update scarcity based on current ecosystem state
             eco_stats = data_ecosystem.get_ecosystem_stats()
             nutrition_system['scarcity_manager'].update_scarcity(eco_stats, len(organisms))
             
-            # Process all organisms with real data ecosystem and nutrition
+            # Process all organisms with real data ecosystem, nutrition, parent care, and fitness
             for organism in organisms:
-                organism.live(data_ecosystem, nutrition_system)
+                organism.live(data_ecosystem, nutrition_system, parent_care_system)
+                
+                # Calculate fitness and apply cultural evolution
+                eco_stats = data_ecosystem.get_ecosystem_stats()
+                apply_fitness_culture(organism, eco_stats, fitness_culture_system)
+            
+            # Check for reproduction opportunities
+            reproduction_candidates = [org for org in organisms if org.can_reproduce()]
+            if len(reproduction_candidates) >= 2:
+                # Try to reproduce some organisms
+                for organism in reproduction_candidates[:2]:  # Limit reproductions
+                    mate = organism.find_mate(organisms)
+                    if mate and random.random() < 0.1:  # 10% chance per tick
+                        child = organism.reproduce(mate, fitness_culture_system)
+                        if child:
+                            organisms.append(child)
             
             # Process batched help requests
             if day % 10 == 0:
@@ -835,18 +946,25 @@ if __name__ == "__main__":
                 for i, organism in enumerate(organisms):
                     emotional_state = organism.get_emotional_state()
                     can_ask_for_help = "🙋" if organism.has_capability(Capability.ASK_PARENT) else "🤐"
-                    print(f"  🦠 Organism {i+1}: Energy={organism.energy}, "
-                          f"Caps={len(organism.capabilities)}, "
-                          f"State={emotional_state} {can_ask_for_help}")
+                    can_reproduce_symbol = "💕" if organism.can_reproduce() else "⭕"
+                    fitness = getattr(organism, 'current_fitness', 0.0)
+                    
+                    print(f"  🦠 Organism {i+1} (gen {organism.generation}): Energy={organism.energy}, "
+                          f"Caps={len(organism.capabilities)}, Age={organism.age}, "
+                          f"Fitness={fitness:.2f}, State={emotional_state} {can_ask_for_help}{can_reproduce_symbol}")
                 
                 # Data ecosystem status
                 eco_stats = data_ecosystem.get_ecosystem_stats()
                 scarcity_report = nutrition_system['scarcity_manager'].get_scarcity_report()
+                parent_report = parent_care_system.get_parenting_report()
+                
                 print(f"  🌍 Ecosystem: {eco_stats['total_food_available']} food available")
                 print(f"  🍯 Food types: {eco_stats['food_by_type']}")
                 print(f"  📉 Scarcity: {scarcity_report['scarcity_level']} "
-                      f"(global: {scarcity_report['global_scarcity']:.2f}, "
-                      f"competition: {scarcity_report['competition_pressure']:.2f})")
+                      f"(global: {scarcity_report['global_scarcity']:.2f})")
+                print(f"  👨‍👩‍👧‍👦 Parent: {parent_report['feeding_budget_used']} feeding, "
+                      f"{parent_report['interventions_used']} interventions, "
+                      f"success: {parent_report['successful_children']}")
             
             # Remove dead organisms and evolve population
             initial_count = len(organisms)
@@ -861,6 +979,13 @@ if __name__ == "__main__":
                 new_gen = max(o.generation for o in organisms) + 1 if organisms else 1
                 organisms.append(Organism(generation=new_gen))
                 print(f"🐣 New organism born (generation {new_gen})")
+                
+                # Update current generation tracking
+                current_generation = max(current_generation, new_gen)
+            
+            # Auto-save organisms every 50 days
+            if day % 50 == 0 and day > 0:
+                auto_save_organisms(organisms, persistence_system, current_generation)
             
             time.sleep(0.1)  # Small delay to see output
         
@@ -869,6 +994,17 @@ if __name__ == "__main__":
         print(f"Food consumed: {final_stats['total_food_consumed']}")
         print(f"Food remaining: {final_stats['total_food_available']}")
         print(f"Parent cache: {len(parent_system.economy.cached_responses)} responses")
+        
+        # Show code evolution statistics
+        teacher_report = code_evolution_system['teacher_modifier'].get_teaching_report()
+        print(f"Code modifications: {teacher_report}")
+        
+        # Show persistence statistics
+        persistence_stats = persistence_system.get_save_statistics()
+        print(f"Persistence: {persistence_stats}")
+        
+        # Final save of all organisms
+        auto_save_organisms(organisms, persistence_system, current_generation)
         
         data_ecosystem.stop()
         print("✅ Digital organism zoo simulation complete!")

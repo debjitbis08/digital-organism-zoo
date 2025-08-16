@@ -1,0 +1,45 @@
+{
+  "id": "c6fb7d88",
+  "generation": 12,
+  "age": 13,
+  "energy": 80,
+  "current_fitness": 1.0,
+  "offspring_count": 0,
+  "parent_help_received": 0,
+  "social_interactions": 0,
+  "failed_attempts": 9,
+  "frustration": 0.8999999999999999,
+  "unique_food_sources": [],
+  "energy_efficiency": 1.0,
+  "known_stories": [],
+  "cultural_influence": 0.0,
+  "code_version": 1,
+  "last_modified": 1755330632,
+  "save_timestamp": 1755330632,
+  "capabilities": [
+    "eat_text",
+    "sense_data"
+  ],
+  "traits": {
+    "aggression": 0.44783649129598124,
+    "cooperation": 0.22243084978781438,
+    "creativity": 0.1515255529385461,
+    "curiosity": 0.8554435172054579,
+    "efficiency": 0.5,
+    "learning_rate": 0.1,
+    "memory_span": 10,
+    "patience": 0.47004567975354955,
+    "pattern_depth": 1,
+    "resilience": 0.3,
+    "risk_taking": 0.5356944148598592,
+    "size": 1.0,
+    "speed": 1.0
+  },
+  "memory": [
+    "environment_data_69",
+    "environment_data_81",
+    "environment_data_33",
+    "environment_data_77"
+  ],
+  "code_modifications": []
+}

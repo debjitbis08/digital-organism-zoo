@@ -1,0 +1,31 @@
+{
+  "generation_number": 9,
+  "organism_count": 3,
+  "save_timestamp": 1755330627,
+  "organisms": [
+    {
+      "organism_id": "c7c8ce17",
+      "organism_file": "organism_saves/organisms/c7c8ce17_1755330627.json",
+      "fitness": 0.721375,
+      "energy": 22,
+      "age": 52,
+      "modification_count": 0
+    },
+    {
+      "organism_id": "0045cec4",
+      "organism_file": "organism_saves/organisms/0045cec4_1755330627.json",
+      "fitness": 0.56,
+      "energy": 36,
+      "age": 26,
+      "modification_count": 0
+    },
+    {
+      "organism_id": "ebf0b41c",
+      "organism_file": "organism_saves/organisms/ebf0b41c_1755330627.json",
+      "fitness": 1.16,
+      "energy": 96,
+      "age": 1,
+      "modification_count": 0
+    }
+  ]
+}
