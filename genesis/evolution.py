@@ -675,7 +675,7 @@ class Organism:
         
         for attempt in range(base_attempts):
             # Each attempt is an evolutionary exploration
-            food_found = self._explore_for_food(data_ecosystem, attempt)
+            food_found = self._explore_for_food(data_ecosystem, attempt, nutrition_system)
             
             if food_found:
                 successful_forages += 1
@@ -749,44 +749,34 @@ class Organism:
         except Exception:
             self._brain_drives = None
     
-    def _explore_for_food(self, data_ecosystem, attempt_number):
+    def _explore_for_food(self, data_ecosystem, attempt_number, nutrition_system=None):
         """Single foraging exploration attempt"""
-        
+        # Use a weighted preference strategy derived from drives and memory
+        from data_sources.harvesters import DataType
+
+        preferred_types = self._choose_preferred_types(n=2, data_ecosystem=data_ecosystem, nutrition_system=nutrition_system)
+
         # Different exploration strategies based on attempt number
         if attempt_number == 0:
-            # Standard foraging
-            prefs = None
-            # Use brain preference for structured data when available
-            if getattr(self, '_brain_drives', None):
-                prefer_struct = self._brain_drives.get('prefer_structured', 0.0)
-                if prefer_struct > 0.6:
-                    from data_sources.harvesters import DataType
-                    prefs = {'preferred_types': [DataType.STRUCTURED_JSON, DataType.CODE]}
+            prefs = {'preferred_types': preferred_types} if preferred_types else None
             # Occasionally surface strategy in feed to make logs interesting
             try:
                 if prefs and random.random() < 0.2:
                     from genesis.stream import doom_feed
-                    doom_feed.add('strategy', f"{self.id} seeks structured data", 1, {'organism': self.id})
+                    label = ','.join(t.value for t in preferred_types)
+                    doom_feed.add('strategy', f"{self.id} seeks {label}", 1, {'organism': self.id})
+                    if getattr(self, 'knowledge_base', None) and random.random() < 0.5:
+                        doom_feed.add('intellect', f"{self.id} strategy shaped by knowledge", 1, {'organism': self.id})
             except Exception:
                 pass
             return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         elif attempt_number == 1:
-            # Try different food preferences if organism can pattern match
+            # Try second-best preference or bias by risk
             if self.has_capability(Capability.PATTERN_MATCH):
-                from data_sources.harvesters import DataType
-                # Brain may bias towards code-only or json-only
-                preferences = {'preferred_types': [DataType.STRUCTURED_JSON, DataType.CODE]}
-                if getattr(self, '_brain_drives', None):
-                    risk = self._brain_drives.get('risk', 0.0)
-                    if risk > 0.7:
-                        preferences = {'preferred_types': [DataType.CODE]}
-                        try:
-                            if random.random() < 0.2:
-                                from genesis.stream import doom_feed
-                                doom_feed.add('strategy', f"{self.id} risks code-only forage", 1, {'organism': self.id})
-                        except Exception:
-                            pass
-                return data_ecosystem.find_food_for_organism(self.capabilities, preferences)
+                if preferred_types and len(preferred_types) > 1:
+                    return data_ecosystem.find_food_for_organism(self.capabilities, {'preferred_types': [preferred_types[1]]})
+                if getattr(self, '_brain_drives', None) and self._brain_drives.get('risk', 0.0) > 0.7:
+                    return data_ecosystem.find_food_for_organism(self.capabilities, {'preferred_types': [DataType.CODE]})
         elif attempt_number == 2:
             # Memory-based foraging - try to remember good food sources
             if self.has_capability(Capability.REMEMBER) and hasattr(self, 'good_food_memories'):
@@ -794,16 +784,14 @@ class Organism:
                     food = data_ecosystem.find_food_for_organism(self.capabilities)
                     if food and food.data_type == memory.get('food_type'):
                         return food
+            # fallback to first preference
+            if preferred_types:
+                return data_ecosystem.find_food_for_organism(self.capabilities, {'preferred_types': [preferred_types[0]]})
         else:
-            # Desperate exploration - try any available food
-            prefs = None
-            if getattr(self, '_brain_drives', None):
-                risk = self._brain_drives.get('risk', 0.0)
-                if risk > 0.6:
-                    # Try code first when risky
-                    from data_sources.harvesters import DataType
-                    prefs = {'preferred_types': [DataType.CODE, DataType.XML_DATA]}
-            return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
+            # Desperate exploration
+            if getattr(self, '_brain_drives', None) and self._brain_drives.get('risk', 0.0) > 0.6:
+                return data_ecosystem.find_food_for_organism(self.capabilities, {'preferred_types': [DataType.CODE, DataType.XML_DATA]})
+            return data_ecosystem.find_food_for_organism(self.capabilities)
         
         return None
     
@@ -867,6 +855,89 @@ class Organism:
                 recent_insights = f"\n   🧠 Learned: {latest.content}"
         
         print(f"🍽️  Organism {self.id} ate {food_morsel.data_type.value} from {food_morsel.source} (+{energy_gained} energy){learning_msg}{recent_insights}")
+
+    def _choose_preferred_types(self, n=2, data_ecosystem=None, nutrition_system=None):
+        """Choose preferred DataTypes based on brain drives, successes, ecosystem, and metabolic state."""
+        try:
+            from data_sources.harvesters import DataType
+        except Exception:
+            return []
+
+        # Base weights
+        weights = {
+            DataType.SIMPLE_TEXT: 0.1,
+            DataType.STRUCTURED_JSON: 0.2,
+            DataType.XML_DATA: 0.15,
+            DataType.CODE: 0.15,
+        }
+        # Brain drives
+        if getattr(self, '_brain_drives', None):
+            ds = self._brain_drives
+            weights[DataType.STRUCTURED_JSON] += 0.5 * ds.get('prefer_structured', 0.0)
+            weights[DataType.CODE] += 0.5 * (0.5 * ds.get('prefer_structured', 0.0) + ds.get('risk', 0.0))
+            weights[DataType.XML_DATA] += 0.2 * ds.get('prefer_structured', 0.0)
+        # Memory successes
+        if hasattr(self, 'good_food_memories') and self.good_food_memories:
+            score = {}
+            for m in self.good_food_memories[-10:]:
+                t = m.get('food_type')
+                score[t] = score.get(t, 0.0) + m.get('energy_gained', 0.0)
+            total = sum(score.values()) or 1.0
+            for t, s in score.items():
+                weights[t] = weights.get(t, 0.0) + 0.3 * (s / total)
+        # Knowledge-influenced preferences (proto "intellectual" modulation)
+        if getattr(self, 'knowledge_base', None):
+            try:
+                summary = self.knowledge_base.get_knowledge_summary()
+                expertise = [e.lower() for e in summary.get('expertise_areas', [])]
+                tech_cues = {'algorithm', 'optimization', 'security', 'database', 'api', 'code'}
+                if any(k in expertise for k in tech_cues):
+                    weights[DataType.CODE] += 0.3
+                trend_cues = {'news', 'trending', 'topic'}
+                if any(k in expertise for k in trend_cues):
+                    weights[DataType.XML_DATA] += 0.2
+                    weights[DataType.STRUCTURED_JSON] += 0.2
+            except Exception:
+                pass
+        # Ecosystem availability (prefer abundant types)
+        if data_ecosystem:
+            eco = data_ecosystem.get_ecosystem_stats()
+            fbt = eco.get('food_by_type', {})
+            total_available = sum(fbt.values()) or 1
+            for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
+                avail = fbt.get(dt.value, 0) / total_available
+                weights[dt] = weights.get(dt, 0.0) + 0.25 * avail
+        # Scarcity manager type-specific scarcity (if available)
+        if nutrition_system and 'scarcity_manager' in nutrition_system:
+            sm = nutrition_system['scarcity_manager']
+            for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
+                ts = sm.type_scarcity.get(dt.value, 0.5)
+                weights[dt] = weights.get(dt, 0.0) + 0.2 * ts
+        # Metabolic recommendations (avoid toxins/addictions)
+        if nutrition_system and 'metabolic_tracker' in nutrition_system:
+            mt = nutrition_system['metabolic_tracker']
+            prof = mt.metabolic_profiles.get(self.id)
+            if prof:
+                # If toxin buildup is high, reduce preference for complex types (CODE)
+                toxin = prof.get('toxin_buildup', 0.0)
+                if toxin > 0.5:
+                    weights[DataType.CODE] *= 0.7
+                # If over-reliant on a type, nudge away
+                pf = prof.get('preferred_foods', {})
+                if pf:
+                    total = sum(pf.values()) or 1
+                    most = max(pf, key=pf.get)
+                    if pf[most] / total > 0.7:
+                        # Reduce that most-eaten type
+                        try:
+                            from data_sources.harvesters import DataType as DT
+                            most_enum = DT(most)
+                            weights[most_enum] *= 0.8
+                        except Exception:
+                            pass
+        # Sort by weight
+        ordered = sorted(weights.items(), key=lambda kv: kv[1], reverse=True)
+        return [t for t, _ in ordered[:n] if _ > 0.0]
     
     def _extract_real_knowledge_from_data(self, food_morsel):
         """REAL DATA PROCESSING: Extract actual knowledge from internet data"""
@@ -1096,7 +1167,8 @@ class Organism:
             social_drive = self._brain_drives.get('social', 0.0)
         
         # Simple signaling based on current state
-        if self.energy > 80 and random.random() < (0.1 + 0.1 * social_drive):
+        social_boost = 0.1 * social_drive
+        if self.energy > 80 and random.random() < (0.1 + social_boost):
             # High energy organisms signal success
             print(f"📡 Organism {self.id} signals: Found abundant food source!")
             try:
@@ -1105,7 +1177,7 @@ class Organism:
             except Exception:
                 pass
             
-        elif self.energy < 30 and random.random() < (0.15 + 0.1 * social_drive):
+        elif self.energy < 30 and random.random() < (0.15 + social_boost):
             # Low energy organisms signal distress
             print(f"🆘 Organism {self.id} signals: Need help finding food!")
             try:
@@ -1116,7 +1188,7 @@ class Organism:
             
         elif getattr(self, 'knowledge_base', None) and self.knowledge_base.knowledge_items:
             # Sometimes share interesting discoveries
-            if random.random() < (0.05 + 0.05 * social_drive):  # slightly higher with social drive
+            if random.random() < (0.05 + 0.1 * social_drive):  # stronger with social drive
                 recent = self.knowledge_base.knowledge_items[-1]
                 if recent.usefulness > 0.6:
                     print(f"💡 Organism {self.id} shares discovery: {recent.content}")
@@ -1151,6 +1223,17 @@ class Organism:
                 doom_feed.add('chatter', f"{self.id}: {msg}", 1, {'organism': self.id})
             except Exception:
                 pass
+
+        # Teaching inclination influenced by social drive and knowledge
+        if getattr(self, 'knowledge_base', None):
+            summary = self.knowledge_base.get_knowledge_summary()
+            if summary['total_insights'] >= 10 and social_drive > 0.7 and random.random() < 0.1:
+                print(f"👩‍🏫 Organism {self.id} offers to teach others")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('teach_offer', f"{self.id} offers to teach", 2, {'organism': self.id})
+                except Exception:
+                    pass
     
     def _learn_foraging_patterns(self, patterns):
         """Learn from successful foraging patterns"""

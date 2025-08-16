@@ -41,16 +41,28 @@ Status: COMPLETED
 
 ## Phase 2: Ecosystem Dynamics 🥈
 
-### 🟡 Task 4: Neuroevolutionary Brain Structures
+### ✅ Task 4: Neuroevolutionary Brain Structures
 File: genesis/brain.py
-Status: PARTIAL (topology mutation for hidden layer; inputs/outputs expanded; sensor/actuator genes; drives influence energy/foraging and traits)
-Next:
-- Richer decision/action mapping from actuators (strategy selection, communication/teaching intensity)
-- Consider dual-system brain architecture (instinctual vs intellectual modules) with separate fast/slow paths
+Status: COMPLETED
+- [x] Minimal MLP brain with evolvable genome
+- [x] Topology mutation (hidden layer resize with safe weight preservation)
+- [x] Sensor/actuator genes; topology.in/out reflect gene counts
+- [x] Weight/bias perturbations and rebuild on mutation
+- [x] Drives produced from actuators and mapped to behaviors (foraging strategies, energy drain, social/teaching inclination)
+- [x] Weighted strategy selection combining drives, memory, ecosystem availability, scarcity, metabolic advice, and knowledge expertise
+
+Deferred follow-ups (new tasks):
+- Dual-system brain (instinctual vs intellectual) with clean interfaces
+- Deeper actuator-to-action coverage (communication/community/teaching intensity)
 
 ### 🟡 Task 5: Evolvable Interfaces (Sensors & Actuators)
-File: genesis/brain.py
-Status: TODO
+File: genesis/brain.py, genesis/evolution.py, data_sources/
+Status: IN PROGRESS (partial groundwork exists in Task 4)
+Scope:
+- Encode sensor and actuator genes (DONE in Task 4) and wire them to real environmental inputs/outputs more broadly
+- Let organisms evolve which environmental signals they sense (e.g., scarcity signals, food freshness, toxicity risk)
+- Expand actuator outputs to real actions (e.g., explicit teaching, trading, migration decisions) and map them safely
+- Keep logs readable by surfacing high-level intent from actuators
 
 ### 🟡 Task 6: Multi-Organism Interactions
 File: genesis/ecosystem.py
