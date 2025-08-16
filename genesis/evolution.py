@@ -214,6 +214,11 @@ class ParentEconomy:
         """Send cached help response to organism"""
         # Simulate sending help (in real system would call organism's learn_from_parent)
         print(f"📚 Cached help sent to {request.organism_id}: {response.get('hint', 'generic_help')}")
+        try:
+            from genesis.stream import doom_feed
+            doom_feed.add('parent_help', f"cached tip for {request.organism_id}", 1)
+        except Exception:
+            pass
     
     def use_llm_for_help(self, request: HelpRequest) -> Optional[Dict]:
         """Use LLM to generate new help response"""
@@ -250,6 +255,11 @@ class ParentEconomy:
             })
         
         print(f"🧠 LLM help generated for {request.organism_id}: {request.type}")
+        try:
+            from genesis.stream import doom_feed
+            doom_feed.add('parent_help', f"new advice for {request.organism_id}", 2)
+        except Exception:
+            pass
         return response
     
     def refuse_help(self, request: HelpRequest, reason: str):
@@ -262,6 +272,11 @@ class ParentEconomy:
         
         message = reasons.get(reason, "Cannot help right now")
         print(f"❌ Help refused for {request.organism_id}: {message}")
+        try:
+            from genesis.stream import doom_feed
+            doom_feed.add('parent_refusal', f"{request.organism_id}: {message}", 2)
+        except Exception:
+            pass
 
 class ParentHelp:
     """When organisms can't do something, they ask for help"""
@@ -396,6 +411,15 @@ class Organism:
         self.code_segments = {}
         self.parent_connection = ParentHelp()
         
+        # Initialize simple evolvable brain
+        try:
+            from genesis.brain import BrainGenome, Brain
+            self.brain_genome = BrainGenome.random()
+            self.brain = Brain(self.brain_genome)
+        except Exception:
+            self.brain_genome = None
+            self.brain = None
+        
         # Initialize missing attributes referenced in methods
         self.social_interactions = 0
         self.successful_predictions = 0
@@ -417,6 +441,7 @@ class Organism:
         self.organisms_taught = set()
         self.known_stories = []
         self.cultural_influence = 0.0
+        self._milestones = set()
         
         # Inherit from parent
         if parent_genome:
@@ -562,8 +587,34 @@ class Organism:
     
     def inherit(self, parent_genome):
         """Inherit traits from parent"""
-        # Simple inheritance - copy some traits with mutation
-        pass
+        # Simple inheritance - copy selected traits and mutate slightly
+        try:
+            parent_traits = parent_genome.get('traits', {}) if isinstance(parent_genome, dict) else {}
+            # Copy over numeric traits when present
+            for attr, val in parent_traits.items():
+                if hasattr(self.traits, attr) and isinstance(val, (int, float)):
+                    # Small mutation around parent value
+                    jitter = random.uniform(0.95, 1.05)
+                    setattr(self.traits, attr, float(val) * jitter)
+
+            # Inherit a subset of capabilities if provided
+            caps = parent_genome.get('capabilities') if isinstance(parent_genome, dict) else None
+            if caps:
+                try:
+                    from genesis.evolution import Capability
+                    inherited = set(Capability(c) if not isinstance(c, Capability) else c for c in caps)
+                    # Keep always-on basics, add inherited set
+                    self.capabilities = set(self.capabilities) | inherited
+                except Exception:
+                    # If capability parsing fails, ignore and keep defaults
+                    pass
+
+            # Advance generation if present
+            if isinstance(parent_genome, dict) and 'generation' in parent_genome:
+                self.generation = int(parent_genome['generation'])
+        except Exception:
+            # Best-effort inheritance; fall back to defaults on error
+            return
     
     def create_genome(self) -> Dict:
         """Create genome for offspring"""
@@ -597,6 +648,9 @@ class Organism:
         if not data_ecosystem:
             return
         
+        # Use brain to derive simple drives from state + ecosystem
+        self._compute_brain_drives(data_ecosystem)
+        
         # Number of foraging attempts based on capabilities and desperation
         base_attempts = 1
         if self.has_capability(Capability.PATTERN_MATCH):
@@ -605,6 +659,10 @@ class Organism:
             base_attempts += 1  # Memory = learn good spots
         if self.energy < 30:
             base_attempts += 2  # Desperation = more searching
+        # Brain exploration drive gives a small bonus attempt
+        if getattr(self, '_brain_drives', None):
+            if self._brain_drives.get('explore', 0.0) > 0.5:
+                base_attempts += 1
         
         successful_forages = 0
         foraging_patterns = []
@@ -643,6 +701,33 @@ class Organism:
         # EVOLUTIONARY PRESSURE: Poor foragers get more frustrated
         if self.foraging_success_rate < 0.3 and self.energy < 50:
             self.frustration += 0.1
+
+    def _compute_brain_drives(self, data_ecosystem=None):
+        """Run the organism's brain to compute simple behavior drives.
+        Produces a dict with keys like 'explore' and 'social'.
+        """
+        if not self.brain:
+            self._brain_drives = None
+            return
+        # Build a small input vector: [energy, frustration, memory_load, scarcity]
+        energy_norm = max(0.0, min(1.0, self.energy / 100.0))
+        frustration = max(0.0, min(1.0, getattr(self, 'frustration', 0.0)))
+        memory_load = max(0.0, min(1.0, len(self.memory) / 100.0))
+        scarcity = 1.0
+        if data_ecosystem:
+            eco = data_ecosystem.get_ecosystem_stats()
+            scarcity = 1.0 - max(0.0, min(1.0, eco.get('food_scarcity', 1.0)))
+        inputs = [energy_norm, frustration, memory_load, scarcity]
+        try:
+            outputs = self.brain.forward(inputs)
+            # Map outputs to [0,1] via simple squashing
+            def squash(x):
+                return max(0.0, min(1.0, 0.5 + (x / 4.0)))
+            explore = squash(outputs[0] if len(outputs) > 0 else 0.0)
+            social = squash(outputs[1] if len(outputs) > 1 else 0.0)
+            self._brain_drives = {'explore': explore, 'social': social}
+        except Exception:
+            self._brain_drives = None
     
     def _explore_for_food(self, data_ecosystem, attempt_number):
         """Single foraging exploration attempt"""
@@ -751,6 +836,13 @@ class Organism:
             # Add knowledge to organism's knowledge base
             for k in knowledge_extracted:
                 print(f"🧠 Organism {self.id} learned: {k.content}")
+            # Doom feed: knowledge pulse
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('knowledge', f"{self.id} absorbed {len(knowledge_extracted)} insight(s)", 1,
+                              {'organism': self.id})
+            except Exception:
+                pass
             self.knowledge_base.add_knowledge(knowledge_extracted, self.id)
             
             # Organisms get smarter as they learn more
@@ -763,11 +855,32 @@ class Organism:
                 insight = self.knowledge_base.generate_insight()
                 if insight:
                     print(f"💡 Organism {self.id} insight: {insight}")
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('insight', f"{self.id} connected dots: {insight}", 2,
+                                      {'organism': self.id})
+                    except Exception:
+                        pass
                     
                     # Insights make organisms more capable of problem-solving
                     if hasattr(self.traits, 'curiosity'):
                         self.traits.curiosity *= 1.02
             
+            # Milestones
+            try:
+                total = self.knowledge_base.get_knowledge_summary()['total_insights']
+                if total >= 1 and 'first_insight' not in self._milestones:
+                    self._milestones.add('first_insight')
+                    self.known_stories.append('first_insight')
+                    from genesis.stream import doom_feed
+                    doom_feed.add('milestone', f"{self.id} had a first insight", 2, {'organism': self.id})
+                if total >= 10 and 'ten_insights' not in self._milestones:
+                    self._milestones.add('ten_insights')
+                    self.known_stories.append('ten_insights')
+                    from genesis.stream import doom_feed
+                    doom_feed.add('milestone', f"{self.id} reached 10 insights", 2, {'organism': self.id})
+            except Exception:
+                pass
             return True
         
         return False
@@ -879,6 +992,11 @@ class Organism:
                 if not hasattr(self, '_problem_solver'):
                     self._problem_solver = True
                     print(f"🔗 Organism {self.id} can connect different data types! Areas: {expertise_areas}")
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('ability', f"{self.id} became a problem-solver", 2, {'organism': self.id})
+                    except Exception:
+                        pass
                 
                 # Problem solvers help other organisms occasionally
                 if hasattr(self.traits, 'cooperation') and random.random() < 0.1:
@@ -902,25 +1020,50 @@ class Organism:
                              if getattr(self, 'knowledge_base', None)
                              else {'total_insights': 0})
         
+        # Brain-derived social drive influences communication likelihood
+        social_drive = 0.0
+        if getattr(self, '_brain_drives', None):
+            social_drive = self._brain_drives.get('social', 0.0)
+        
         # Simple signaling based on current state
-        if self.energy > 80 and random.random() < 0.1:
+        if self.energy > 80 and random.random() < (0.1 + 0.1 * social_drive):
             # High energy organisms signal success
             print(f"📡 Organism {self.id} signals: Found abundant food source!")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('signal', f"{self.id} boasts of abundance", 1, {'organism': self.id})
+            except Exception:
+                pass
             
-        elif self.energy < 30 and random.random() < 0.15:
+        elif self.energy < 30 and random.random() < (0.15 + 0.1 * social_drive):
             # Low energy organisms signal distress
             print(f"🆘 Organism {self.id} signals: Need help finding food!")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('distress', f"{self.id} calls for help", 3, {'organism': self.id})
+            except Exception:
+                pass
             
         elif getattr(self, 'knowledge_base', None) and self.knowledge_base.knowledge_items:
             # Sometimes share interesting discoveries
-            if random.random() < 0.05:  # 5% chance
+            if random.random() < (0.05 + 0.05 * social_drive):  # slightly higher with social drive
                 recent = self.knowledge_base.knowledge_items[-1]
                 if recent.usefulness > 0.6:
                     print(f"💡 Organism {self.id} shares discovery: {recent.content}")
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('share', f"{self.id} shares: {recent.content}", 1, {'organism': self.id})
+                    except Exception:
+                        pass
         
         # React to frustration by calling for help
         if hasattr(self, 'frustration') and self.frustration > 0.8 and random.random() < 0.2:
             print(f"😤 Organism {self.id} signals frustration: Struggling to survive!")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('frustration', f"{self.id} is frustrated", 2, {'organism': self.id})
+            except Exception:
+                pass
         # Occasional chatter: share a snippet from memory or recent insights
         if random.random() < 0.2:
             options = []
@@ -933,6 +1076,11 @@ class Organism:
             else:
                 msg = '[silent contemplative humming]'
             print(f"💬 Organism {self.id} chatter: {msg}")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('chatter', f"{self.id}: {msg}", 1, {'organism': self.id})
+            except Exception:
+                pass
     
     def _learn_foraging_patterns(self, patterns):
         """Learn from successful foraging patterns"""
@@ -1079,6 +1227,19 @@ class Organism:
         # Random mutation
         if random.random() < self.traits.learning_rate:
             self.traits.mutate()
+            # Occasionally mutate brain genome as part of organism evolution
+            if self.brain_genome and random.random() < 0.05:
+                self.brain_genome.mutate()
+                try:
+                    from genesis.brain import Brain
+                    self.brain = Brain(self.brain_genome)
+                except Exception:
+                    pass
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('evolution', f"{self.id}'s brain rewired itself", 2, {'organism': self.id})
+                except Exception:
+                    pass
         
         # Try to unlock new capability based on experience
         possible_unlocks = self.check_unlock_conditions()
@@ -1089,6 +1250,12 @@ class Organism:
             if self.try_unlock(new_capability):
                 self.capabilities.add(new_capability)
                 print(f"Organism {self.id} unlocked {new_capability.value}!")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('unlock', f"{self.id} unlocked {new_capability.value}", 3,
+                                  {'organism': self.id, 'capability': new_capability.value})
+                except Exception:
+                    pass
     
     def check_unlock_conditions(self) -> List[Capability]:
         """What capabilities can potentially be unlocked?"""

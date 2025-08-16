@@ -215,6 +215,11 @@ class ActiveParentCareSystem:
                 ])
                 
                 print(f"🍼 Parent feeds young organism {organism.id} (+{energy_to_give} energy): \"{advice}\"")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('parent_feed', f"Fed {organism.id}: +{energy_to_give} energy", 2)
+                except Exception:
+                    pass
                 
                 return CareAction(
                     action_type="dependency_feeding",
@@ -235,6 +240,11 @@ class ActiveParentCareSystem:
                     monitoring_data['care_received'] += 3
                     
                     print(f"👨‍🎓 Parent teaches {organism.id} PATTERN_MATCH capability: \"Here, let me show you how to recognize patterns...\"")
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('parent_teach', f"{organism.id} unlocked PATTERN_MATCH", 3)
+                    except Exception:
+                        pass
                     
                     return CareAction(
                         action_type="emergency_teaching",
@@ -254,6 +264,11 @@ class ActiveParentCareSystem:
                         monitoring_data['care_received'] += 5
                         
                         print(f"🔧 Parent modifies {organism.id}'s code: \"Your body needs improvement, child...\"")
+                        try:
+                            from genesis.stream import doom_feed
+                            doom_feed.add('parent_modify', f"Modified {organism.id} for survival", 3)
+                        except Exception:
+                            pass
                         
                         return CareAction(
                             action_type="code_modification",
@@ -288,7 +303,12 @@ class ActiveParentCareSystem:
                         "Look within the data streams for hidden truths..."
                     ])
                     
-                    print(f"🎒 Parent helps learning organism {organism.id} (+{energy_to_give} energy): \"{advice}\"")
+                print(f"🎒 Parent helps learning organism {organism.id} (+{energy_to_give} energy): \"{advice}\"")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('parent_help', f"Aided {organism.id}: +{energy_to_give} energy", 1)
+                except Exception:
+                    pass
                     
                     return CareAction(
                         action_type="teaching_emergency_feeding",
@@ -319,6 +339,11 @@ class ActiveParentCareSystem:
                     "Your struggle is the path to understanding..."
                 ])
                 print(f"🤔 Parent speaks in riddles to {organism.id}: \"{advice}\"")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('parent_riddle', f"To {organism.id}: {advice}", 1)
+                except Exception:
+                    pass
                 
                 return CareAction(
                     action_type="learning_encouragement",
@@ -351,6 +376,11 @@ class ActiveParentCareSystem:
                 ])
                 
                 print(f"🆘 Parent emergency help for independent {organism.id} (+{energy_to_give} energy): \"{advice}\"")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('parent_emergency', f"Rescued {organism.id}: +{energy_to_give}", 3)
+                except Exception:
+                    pass
                 
                 return CareAction(
                     action_type="independence_emergency",
@@ -370,6 +400,11 @@ class ActiveParentCareSystem:
             organism.energy += 5
             advice = "You're an adult. Figure it out."
             print(f"😤 Parent grudgingly helps estranged {organism.id}: \"{advice}\"")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('parent_minimal', f"Kept {organism.id} alive", 2)
+            except Exception:
+                pass
             
             return CareAction(
                 action_type="minimal_emergency",

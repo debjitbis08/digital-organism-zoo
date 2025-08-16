@@ -405,5 +405,13 @@ def check_community_activities(organisms: List, ecosystem_stats: Dict, community
     for activity in activities:
         participants_str = f"{len(activity.participants)} organisms"
         print(f"🎯 COMMUNITY: {activity.description} ({participants_str})")
+        try:
+            from genesis.stream import doom_feed
+            doom_feed.add('community', activity.description, 2, {
+                'participants': activity.participants,
+                'type': activity.activity_type.value
+            })
+        except Exception:
+            pass
     
     return activities

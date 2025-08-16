@@ -1,4 +1,3 @@
 __pycache__
-organism_saves/generations/
-organism_saves/organisms/
+organism_saves/
 .env

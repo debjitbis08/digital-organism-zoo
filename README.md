@@ -23,7 +23,7 @@ Digital organisms that:
 
 ### In Development
 - 🔄 **Ollama LLM integration** for real parent responses
-- 🔄 **Organism persistence** (save/load between sessions)
+- 🔄 **Organism persistence** (save/load between sessions; optional SQLite backend)
 - 🔄 **Multi-organism interactions** and resource competition
 
 ## Quick Start
@@ -37,6 +37,26 @@ python genesis/evolution.py
 
 # Watch organisms evolve and compete for real data!
 ```
+
+### Persistence backend
+
+By default, organism state is saved as JSON files under organism_saves/.
+For larger runs, you can switch to a local SQLite database for fewer files
+and faster lookups:
+
+```bash
+export PERSISTENCE_BACKEND=sqlite
+python genesis/evolution.py
+```
+
+Or programmatically:
+
+```python
+from genesis.persistence import create_persistence_system
+persistence = create_persistence_system(backend="sqlite")
+```
+
+The SQLite database is created at organism_saves/organisms.db.
 
 ## Architecture
 
@@ -88,7 +108,7 @@ True digital life where organisms:
 
 ## Contributing
 
-See `CLAUDE.md` for detailed development roadmap and current TODO list.
+See `TODOS.md` for detailed development roadmap and current TODO list.
 
 ## The Magic ✨
 
