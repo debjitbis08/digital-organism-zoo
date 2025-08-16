@@ -91,6 +91,13 @@ class ActiveParentCareSystem:
             self.last_budget_reset = current_time
             self.parent.regenerate_energy()
             print("👨‍👩‍👧‍👦 Parent rested - care budgets refreshed")
+
+    def emergency_budget_boost(self, crisis_level: float):
+        """Temporarily increase parent intervention budget based on crisis severity."""
+        # Add at least one extra intervention per severe crisis
+        boost = max(1, int(crisis_level * self.emergency_interventions))
+        self.emergency_interventions += boost
+        print(f"🚑 Emergency intervention budget boosted by {boost}, total now {self.emergency_interventions}")
     
     def monitor_organism(self, organism):
         """Continuously monitor organism wellbeing"""

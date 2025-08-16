@@ -1,1 +1,4 @@
 __pycache__
+organism_saves/generations/
+organism_saves/organisms/
+.env

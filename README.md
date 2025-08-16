@@ -32,7 +32,7 @@ Digital organisms that:
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the ecosystem
+# Run the ecosystem (auto-resumes from last save if available)
 python genesis/evolution.py
 
 # Watch organisms evolve and compete for real data!
