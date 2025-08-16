@@ -1,6 +1,7 @@
 # Organism Evolution System: What Can Evolve & Parent-Help Mechanism
 
 import json
+import os
 import random
 import time
 from enum import Enum
@@ -351,6 +352,8 @@ class ParentHelp:
             
         elif request['type'] == 'found_bug':
             return self.help_debug(organism, request['context'])
+
+
     
     def teach_eating(self, organism, context):
         """Break down complex data into digestible pieces"""
@@ -387,6 +390,38 @@ class ParentHelp:
             'lesson': 'need_prerequisites_first',
             'required': self.get_prerequisites(desired)
         }
+
+# Simple shared trade board for exchanging foraging leads
+class _TradeBoard:
+    def __init__(self, max_items: int = 50):
+        self.max_items = max_items
+        self.leads: List[Dict[str, Any]] = []
+
+    def post_lead(self, organism_id: str, food_type, source: str, score: float = 1.0, hint: Optional[str] = None):
+        try:
+            entry = {
+                'organism': organism_id,
+                'type': food_type,  # DataType enum
+                'source': source,
+                'score': float(score),
+                'ts': time.time(),
+                'hint': hint or '',
+            }
+            self.leads.append(entry)
+            if len(self.leads) > self.max_items:
+                self.leads = self.leads[-self.max_items:]
+            from genesis.stream import doom_feed
+            kind = getattr(food_type, 'value', str(food_type)) if food_type is not None else (hint or 'hint')
+            doom_feed.add('lead', f"{organism_id} posted lead: {kind} from {source}", 1, {'organism': organism_id})
+        except Exception:
+            pass
+
+    def get_recent_leads(self, limit: int = 5) -> List[Dict[str, Any]]:
+        return list(self.leads[-limit:])
+
+
+# Singleton trade board
+trade_board = _TradeBoard()
 
 class Organism:
     """A digital life form that evolves.
@@ -442,6 +477,14 @@ class Organism:
         self.known_stories = []
         self.cultural_influence = 0.0
         self._milestones = set()
+        # Social signals reinforcement tracking
+        self.trade_lead_successes = 0
+        self.hint_lead_successes = 0
+        # Virtual region for lightweight migration experiments
+        self.current_region = 'default'
+        # Interface adaptation dynamics
+        self.interface_adaptation_rate = 0.25
+        self._adaptation_history = []  # recent outcomes for tuning
         
         # Inherit from parent
         if parent_genome:
@@ -641,6 +684,8 @@ class Organism:
     def generate_hypothesis(self, environment) -> str:
         """Generate hypothesis about environment"""
         return f"hypothesis_about_{environment['type']}"
+
+
     
     def _evolutionary_foraging_phase(self, data_ecosystem, nutrition_system):
         """EVOLUTIONARY FORAGING: Multiple attempts to find food, learning from patterns"""
@@ -648,8 +693,8 @@ class Organism:
         if not data_ecosystem:
             return
         
-        # Use brain to derive simple drives from state + ecosystem
-        self._compute_brain_drives(data_ecosystem)
+        # Use brain to derive simple drives from state + ecosystem + nutrition
+        self._compute_brain_drives(data_ecosystem, nutrition_system)
         
         # Number of foraging attempts based on capabilities and desperation
         base_attempts = 1
@@ -669,6 +714,52 @@ class Organism:
             # High conserve drive reduces unnecessary searching when safe
             if self.energy > 40 and self._brain_drives.get('conserve', 0.0) > 0.8:
                 base_attempts = max(1, base_attempts - 1)
+        # Competition-aware adjustment using last sensor snapshot (higher scarcity/competition -> try a bit harder)
+        try:
+            comp = 0.0
+            if hasattr(self, '_last_sensor_map'):
+                comp = float(self._last_sensor_map.get('competition_local', 0.0))
+            if comp > 0.75 and base_attempts < 4:
+                base_attempts += 1
+            elif comp < 0.25 and base_attempts > 1 and getattr(self, '_brain_drives', {}).get('conserve', 0.0) > 0.6:
+                base_attempts = max(1, base_attempts - 1)
+        except Exception:
+            pass
+        # Migration action: switch virtual regions when scarcity and drive are high
+        if getattr(self, '_brain_drives', None):
+            mig = self._brain_drives.get('migrate', 0.0)
+            try:
+                eco = data_ecosystem.get_ecosystem_stats() if data_ecosystem else {}
+                scarcity_flag = (eco.get('food_scarcity', 1.0) or 1.0) < 0.5
+            except Exception:
+                scarcity_flag = False
+            force_mig = os.environ.get('ZOO_FORCE_MIGRATION', '0') == '1'
+            if force_mig or (mig > 0.75 and scarcity_flag and random.random() < 0.25):
+                prev = self.current_region
+                # Choose destination based on other drives
+                drives = self._brain_drives
+                target = prev
+                if drives.get('prefer_structured', 0.0) > 0.6:
+                    target = 'structured-rich'
+                elif drives.get('risk', 0.0) > 0.7:
+                    target = 'code-rich'
+                elif drives.get('conserve', 0.0) > 0.6:
+                    target = 'text-meadow'
+                if target == prev and force_mig:
+                    # Pick an alternate region deterministically for testing
+                    try:
+                        # Use known regions from ecosystem biases
+                        regions = ['structured-rich', 'code-rich', 'text-meadow']
+                        target = regions[0] if prev not in regions else regions[(regions.index(prev) + 1) % len(regions)]
+                    except Exception:
+                        target = 'structured-rich'
+                if target != prev:
+                    self.current_region = target
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('migration', f"{self.id} migrated {prev}→{target}", 2, {'organism': self.id})
+                    except Exception:
+                        pass
         
         successful_forages = 0
         foraging_patterns = []
@@ -708,7 +799,7 @@ class Organism:
         if self.foraging_success_rate < 0.3 and self.energy < 50:
             self.frustration += 0.1
 
-    def _compute_brain_drives(self, data_ecosystem=None):
+    def _compute_brain_drives(self, data_ecosystem=None, nutrition_system=None):
         """Run the organism's brain to compute simple behavior drives.
         Produces a dict with keys like 'explore' and 'social'.
         """
@@ -725,14 +816,47 @@ class Organism:
             scarcity = 1.0 - max(0.0, min(1.0, eco.get('food_scarcity', 1.0)))
         age_norm = max(0.0, min(1.0, self.age / 500.0))
         cap_norm = max(0.0, min(1.0, len(self.capabilities) / 10.0))
+        recent_success = getattr(self, 'foraging_success_rate', 0.5)
         sensor_map = {
             'energy': energy_norm,
             'frustration': frustration,
             'memory_load': memory_load,
             'scarcity': scarcity,
             'age': age_norm,
-            'capability_density': cap_norm
+            'capability_density': cap_norm,
+            'recent_success': max(0.0, min(1.0, recent_success)),
         }
+        # Extended sensors available for Task 5
+        # Global scarcity (alias)
+        sensor_map['scarcity_global'] = scarcity
+        # Ecosystem-derived
+        if data_ecosystem:
+            eco = data_ecosystem.get_ecosystem_stats()
+            avg_fresh = eco.get('average_freshness', 0.5) or 0.5
+            fbt = eco.get('food_by_type', {})
+            total = sum(fbt.values()) or 1
+            availability_structured = fbt.get('structured_json', 0) / total
+            availability_code = fbt.get('code', 0) / total
+            sensor_map['freshness_expectation'] = max(0.0, min(1.0, avg_fresh))
+            sensor_map['availability_structured'] = max(0.0, min(1.0, availability_structured))
+            sensor_map['availability_code'] = max(0.0, min(1.0, availability_code))
+            # Type-specific scarcity proxies
+            sensor_map['scarcity_structured'] = max(0.0, min(1.0, 1.0 - availability_structured))
+            sensor_map['scarcity_code'] = max(0.0, min(1.0, 1.0 - availability_code))
+            # proxy for competition/pressure (reuse scarcity for now)
+            sensor_map['competition_local'] = max(0.0, min(1.0, scarcity))
+        # Metabolic/health
+        if nutrition_system and 'metabolic_tracker' in nutrition_system:
+            prof = nutrition_system['metabolic_tracker'].metabolic_profiles.get(self.id)
+            if prof:
+                sensor_map['toxicity_buildup'] = max(0.0, min(1.0, prof.get('toxin_buildup', 0.0)))
+                me = prof.get('metabolic_efficiency', 1.0)  # ~0.3..1.0
+                # Normalize approx 0..1
+                sensor_map['metabolic_efficiency'] = max(0.0, min(1.0, (me - 0.3) / 0.7))
+        # Novelty desire: stronger when recent success is low
+        sensor_map['novelty_hunger'] = max(0.0, min(1.0, 1.0 - sensor_map.get('recent_success', 0.5)))
+        # Keep last sensor snapshot for downstream preference logic
+        self._last_sensor_map = sensor_map
         sensors = getattr(self.brain, 'sensors', ['energy','frustration','memory_load','scarcity','age','capability_density'])
         inputs = [sensor_map.get(s, 0.0) for s in sensors]
         try:
@@ -740,14 +864,48 @@ class Organism:
             # Map outputs to [0,1] via simple squashing in actuator order
             def squash(x):
                 return max(0.0, min(1.0, 0.5 + (x / 4.0)))
-            actuators = getattr(self.brain, 'actuators', ['explore','social','conserve','prefer_structured','risk'])
+            actuators = getattr(self.brain, 'actuators', ['explore','social','conserve','prefer_structured','risk','teach','trade','migrate'])
             drives = {}
             for i, name in enumerate(actuators):
                 val = outputs[i] if i < len(outputs) else 0.0
                 drives[name] = squash(val)
             self._brain_drives = drives
+            # Occasionally surface high-level intent in the doom feed for readability
+            try:
+                if random.random() < 0.05:
+                    from genesis.stream import doom_feed
+                    top = sorted(drives.items(), key=lambda kv: kv[1], reverse=True)
+                    if top:
+                        k, v = top[0]
+                        doom_feed.add('intent', f"{self.id} drive: {k}={v:.2f}", 1, {'organism': self.id})
+            except Exception:
+                pass
         except Exception:
             self._brain_drives = None
+
+    def _get_interface_adapt_rate(self) -> float:
+        """Dynamic probability to adapt interfaces based on recent performance.
+
+        Higher when struggling; lower when succeeding to stabilize beneficial I/O.
+        """
+        base = getattr(self, 'interface_adaptation_rate', 0.25)
+        fsr = getattr(self, 'foraging_success_rate', 0.5)
+        # Struggling: increase chance to adapt
+        if fsr < 0.3 or self.energy < 50:
+            base = min(0.6, base + 0.2)
+        # Succeeding: reduce chance to adapt (stabilize)
+        elif fsr > 0.55 and self.energy > 80:
+            base = max(0.05, base - 0.15)
+        # Toxicity high -> slight increase to add metabolic sensors
+        try:
+            tox = 0.0
+            if hasattr(self, '_last_sensor_map'):
+                tox = float(self._last_sensor_map.get('toxicity_buildup', 0.0))
+            if tox > 0.6:
+                base = min(0.6, base + 0.1)
+        except Exception:
+            pass
+        return base
     
     def _explore_for_food(self, data_ecosystem, attempt_number, nutrition_system=None):
         """Single foraging exploration attempt"""
@@ -758,13 +916,105 @@ class Organism:
 
         # Different exploration strategies based on attempt number
         if attempt_number == 0:
-            prefs = {'preferred_types': preferred_types} if preferred_types else None
+            # Build preferences informed by brain drives and metabolic state
+            prefs = {'preferred_types': preferred_types} if preferred_types else {}
+            drives = getattr(self, '_brain_drives', {}) or {}
+            # Difficulty: conserve prefers easy, risk prefers challenging
+            if drives.get('conserve', 0.0) > 0.6 and drives.get('risk', 0.0) < 0.6:
+                prefs['difficulty_preference'] = 'low'
+            elif drives.get('risk', 0.0) > 0.7 and drives.get('conserve', 0.0) < 0.6:
+                prefs['difficulty_preference'] = 'high'
+            # Metabolic efficiency nudges difficulty
+            try:
+                me = 0.7
+                if hasattr(self, '_last_sensor_map'):
+                    me = max(0.0, min(1.0, float(self._last_sensor_map.get('metabolic_efficiency', 0.7))))
+                if me < 0.4:
+                    prefs['difficulty_preference'] = 'low'
+                elif me > 0.8 and drives.get('risk', 0.0) > 0.6:
+                    prefs['difficulty_preference'] = 'high'
+            except Exception:
+                pass
+            # Apply region preference to leverage virtual habitats
+            try:
+                if hasattr(self, 'current_region') and self.current_region:
+                    prefs['region'] = self.current_region
+            except Exception:
+                pass
+            # Freshness threshold influenced by conserve
+            cons = drives.get('conserve', 0.0)
+            min_fresh = max(0.0, min(1.0, 0.2 + 0.5 * cons))
+            # Auto-tune with ecosystem freshness expectation
+            try:
+                eco_stats = data_ecosystem.get_ecosystem_stats()
+                avg_fresh = eco_stats.get('average_freshness', 0.5) or 0.5
+                min_fresh = max(min_fresh, max(0.0, min(1.0, avg_fresh - 0.1)))
+            except Exception:
+                pass
+            # Novelty hunger reduces freshness threshold slightly to explore more
+            try:
+                novelty = 0.0
+                if hasattr(self, '_last_sensor_map'):
+                    novelty = max(0.0, min(1.0, float(self._last_sensor_map.get('novelty_hunger', 0.0))))
+                if novelty > 0.5:
+                    min_fresh = max(0.0, min_fresh - 0.1 * (novelty - 0.5) * 2.0)
+            except Exception:
+                pass
+            prefs['min_freshness'] = min_fresh
+            # Toxicity avoidance based on metabolic profile
+            if nutrition_system and 'metabolic_tracker' in nutrition_system:
+                mt = nutrition_system['metabolic_tracker']
+                prof = mt.metabolic_profiles.get(self.id)
+                if prof and prof.get('toxin_buildup', 0.0) > 0.6:
+                    prefs['toxicity_avoid_code'] = True
+            # Competition-aware freshness tuning: under high competition, be less picky; under low + conserve, be pickier
+            try:
+                comp = 0.0
+                if hasattr(self, '_last_sensor_map'):
+                    comp = max(0.0, min(1.0, float(self._last_sensor_map.get('competition_local', 0.0))))
+                if comp > 0.7:
+                    prefs['min_freshness'] = max(0.0, prefs.get('min_freshness', 0.0) - 0.05 * (comp - 0.7) * 3.0)
+                elif comp < 0.3 and drives.get('conserve', 0.0) > 0.6:
+                    prefs['min_freshness'] = min(1.0, prefs.get('min_freshness', 0.0) + 0.05)
+            except Exception:
+                pass
+            # Use trade board lead to bias first attempt if available
+            if drives.get('trade', 0.0) > 0.6:
+                leads = trade_board.get_recent_leads()
+                if leads:
+                    last = leads[-1]
+                    lt = last.get('type')
+                    try:
+                        if lt is not None:
+                            # Use the lead type exclusively for first attempt
+                            prefs['preferred_types'] = [lt]
+                            self._lead_context = {'type': lt}
+                        else:
+                            # Interpret hint-only leads
+                            hint = (last.get('hint') or '').lower()
+                            from data_sources.harvesters import DataType
+                            if 'prefer_structured' in hint:
+                                prefs['preferred_types'] = [DataType.STRUCTURED_JSON, DataType.XML_DATA]
+                                self._lead_context = {'hint': 'prefer_structured'}
+                            elif 'prefer_code' in hint:
+                                prefs['preferred_types'] = [DataType.CODE]
+                                self._lead_context = {'hint': 'prefer_code'}
+                    except Exception:
+                        pass
+            else:
+                # No lead used on this attempt
+                self._lead_context = None
             # Occasionally surface strategy in feed to make logs interesting
             try:
                 if prefs and random.random() < 0.2:
                     from genesis.stream import doom_feed
                     label = ','.join(t.value for t in preferred_types)
-                    doom_feed.add('strategy', f"{self.id} seeks {label}", 1, {'organism': self.id})
+                    msg = f"{self.id} seeks {label}"
+                    if 'difficulty_preference' in prefs:
+                        msg += f" diff={prefs['difficulty_preference']}"
+                    if 'min_freshness' in prefs:
+                        msg += f" fresh>{prefs['min_freshness']:.2f}"
+                    doom_feed.add('strategy', msg, 1, {'organism': self.id})
                     if getattr(self, 'knowledge_base', None) and random.random() < 0.5:
                         doom_feed.add('intellect', f"{self.id} strategy shaped by knowledge", 1, {'organism': self.id})
             except Exception:
@@ -786,7 +1036,12 @@ class Organism:
                         return food
             # fallback to first preference
             if preferred_types:
-                return data_ecosystem.find_food_for_organism(self.capabilities, {'preferred_types': [preferred_types[0]]})
+                drives = getattr(self, '_brain_drives', {}) or {}
+                prefs = {'preferred_types': [preferred_types[0]]}
+                if drives.get('conserve', 0.0) > 0.6:
+                    prefs['difficulty_preference'] = 'low'
+                    prefs['min_freshness'] = 0.5
+                return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         else:
             # Desperate exploration
             if getattr(self, '_brain_drives', None) and self._brain_drives.get('risk', 0.0) > 0.6:
@@ -804,6 +1059,33 @@ class Organism:
         if not nutrition_system:
             # Simple processing
             self.energy += food_morsel.energy_value
+            # Reinforcement for simple path
+            try:
+                if hasattr(self, '_lead_context') and self._lead_context:
+                    from data_sources.harvesters import DataType
+                    ctx = self._lead_context
+                    matched = False
+                    if 'type' in ctx and isinstance(ctx['type'], DataType):
+                        if food_morsel.data_type == ctx['type']:
+                            self.trade_lead_successes += 1
+                            matched = True
+                    elif 'hint' in ctx:
+                        hint = ctx['hint']
+                        if hint == 'prefer_structured' and food_morsel.data_type in (DataType.STRUCTURED_JSON, DataType.XML_DATA):
+                            self.hint_lead_successes += 1
+                            matched = True
+                        elif hint == 'prefer_code' and food_morsel.data_type == DataType.CODE:
+                            self.hint_lead_successes += 1
+                            matched = True
+                    if matched:
+                        try:
+                            from genesis.stream import doom_feed
+                            doom_feed.add('lead_success', f"{self.id} validated a shared lead", 1, {'organism': self.id})
+                        except Exception:
+                            pass
+            finally:
+                if hasattr(self, '_lead_context'):
+                    self._lead_context = None
             return
         
         # Advanced nutritional processing
@@ -816,6 +1098,35 @@ class Organism:
             energy_gained = food_morsel.energy_value
         
         self.energy += energy_gained
+
+        # Reinforcement: if this success followed a trade/teaching lead, record it and surface
+        try:
+            if hasattr(self, '_lead_context') and self._lead_context:
+                from data_sources.harvesters import DataType
+                ctx = self._lead_context
+                matched = False
+                if 'type' in ctx and isinstance(ctx['type'], DataType):
+                    if food_morsel.data_type == ctx['type']:
+                        self.trade_lead_successes += 1
+                        matched = True
+                elif 'hint' in ctx:
+                    hint = ctx['hint']
+                    if hint == 'prefer_structured' and food_morsel.data_type in (DataType.STRUCTURED_JSON, DataType.XML_DATA):
+                        self.hint_lead_successes += 1
+                        matched = True
+                    elif hint == 'prefer_code' and food_morsel.data_type == DataType.CODE:
+                        self.hint_lead_successes += 1
+                        matched = True
+                if matched:
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('lead_success', f"{self.id} validated a shared lead", 1, {'organism': self.id})
+                    except Exception:
+                        pass
+        finally:
+            # Clear lead context regardless of match
+            if hasattr(self, '_lead_context'):
+                self._lead_context = None
         
         # Remember good food sources
         if energy_gained > 8 and self.has_capability(Capability.REMEMBER):
@@ -899,20 +1210,65 @@ class Organism:
                     weights[DataType.STRUCTURED_JSON] += 0.2
             except Exception:
                 pass
+        # Novelty seeking vs repetition (scaled by novelty_hunger sensor if available)
+        drives = getattr(self, '_brain_drives', {}) or {}
+        explore_drive = drives.get('explore', 0.0)
+        novelty = 0.0
+        if hasattr(self, '_last_sensor_map'):
+            novelty = max(0.0, min(1.0, self._last_sensor_map.get('novelty_hunger', 0.0)))
+        recent_types = []
+        if hasattr(self, 'good_food_memories') and self.good_food_memories:
+            recent_types = [m.get('food_type') for m in self.good_food_memories[-5:]]
+        if explore_drive > 0.7 or novelty > 0.5:
+            for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
+                if dt not in recent_types:
+                    boost = 0.1 + 0.2 * max(explore_drive - 0.7, 0.0) + 0.2 * max(novelty - 0.5, 0.0)
+                    weights[dt] = weights.get(dt, 0.0) + boost
+                else:
+                    weights[dt] = max(0.0, weights.get(dt, 0.0) - 0.05 * (1.0 + 0.5 * novelty))
         # Ecosystem availability (prefer abundant types)
         if data_ecosystem:
             eco = data_ecosystem.get_ecosystem_stats()
             fbt = eco.get('food_by_type', {})
             total_available = sum(fbt.values()) or 1
+            # Competition-aware scaling: under high competition, prefer abundant types more strongly
+            comp = 0.0
+            if hasattr(self, '_last_sensor_map'):
+                comp = max(0.0, min(1.0, float(self._last_sensor_map.get('competition_local', 0.0))))
+            avail_scale = 0.25 * (0.6 + 0.8 * comp)  # 0.15..0.45
             for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
                 avail = fbt.get(dt.value, 0) / total_available
-                weights[dt] = weights.get(dt, 0.0) + 0.25 * avail
+                weights[dt] = weights.get(dt, 0.0) + avail_scale * avail
+            # Migration intent: if high and scarcity, nudge towards under-consumed types
+            scarcity_flag = (eco.get('food_scarcity', 1.0) or 1.0) < 0.4
+            if drives.get('migrate', 0.0) > 0.7 and scarcity_flag and recent_types:
+                for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
+                    if dt not in recent_types:
+                        weights[dt] = weights.get(dt, 0.0) + 0.1
         # Scarcity manager type-specific scarcity (if available)
         if nutrition_system and 'scarcity_manager' in nutrition_system:
             sm = nutrition_system['scarcity_manager']
             for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
                 ts = sm.type_scarcity.get(dt.value, 0.5)
                 weights[dt] = weights.get(dt, 0.0) + 0.2 * ts
+        # Metabolic adaptability: low efficiency -> prefer simpler/structured; high efficiency -> tolerate more complex
+        try:
+            me = 0.7
+            toxin = 0.0
+            if hasattr(self, '_last_sensor_map'):
+                me = max(0.0, min(1.0, float(self._last_sensor_map.get('metabolic_efficiency', 0.7))))
+                toxin = max(0.0, min(1.0, float(self._last_sensor_map.get('toxicity_buildup', 0.0))))
+            if me < 0.4:
+                weights[DataType.CODE] *= 0.7
+                weights[DataType.SIMPLE_TEXT] = weights.get(DataType.SIMPLE_TEXT, 0.0) + 0.1
+                weights[DataType.STRUCTURED_JSON] = weights.get(DataType.STRUCTURED_JSON, 0.0) + 0.1
+            elif me > 0.75:
+                weights[DataType.CODE] = weights.get(DataType.CODE, 0.0) + 0.12
+            # If toxins are high, reduce CODE preference
+            if toxin > 0.6:
+                weights[DataType.CODE] *= 0.75
+        except Exception:
+            pass
         # Metabolic recommendations (avoid toxins/addictions)
         if nutrition_system and 'metabolic_tracker' in nutrition_system:
             mt = nutrition_system['metabolic_tracker']
@@ -1224,16 +1580,71 @@ class Organism:
             except Exception:
                 pass
 
-        # Teaching inclination influenced by social drive and knowledge
+        # Teaching inclination influenced by social drive and teach actuator
         if getattr(self, 'knowledge_base', None):
             summary = self.knowledge_base.get_knowledge_summary()
-            if summary['total_insights'] >= 10 and social_drive > 0.7 and random.random() < 0.1:
-                print(f"👩‍🏫 Organism {self.id} offers to teach others")
+            teach_drive = getattr(self, '_brain_drives', {}).get('teach', 0.0)
+            if summary['total_insights'] >= 10 and (social_drive > 0.7 or teach_drive > 0.6) and random.random() < 0.15:
+                self._attempt_teaching_action()
+
+        # Trade inclination: share a recent high-yield lead on the trade board
+        trade_drive = getattr(self, '_brain_drives', {}).get('trade', 0.0)
+        if trade_drive > 0.75 and random.random() < 0.12:
+            # Share a good food memory as a lead
+            if hasattr(self, 'good_food_memories') and self.good_food_memories:
+                best = max(self.good_food_memories[-5:], key=lambda m: m.get('energy_gained', 0.0))
                 try:
-                    from genesis.stream import doom_feed
-                    doom_feed.add('teach_offer', f"{self.id} offers to teach", 2, {'organism': self.id})
+                    from data_sources.harvesters import DataType
+                    ft = best.get('food_type')
+                    if isinstance(ft, DataType):
+                        trade_board.post_lead(self.id, ft, best.get('source', 'unknown'), best.get('energy_gained', 0.0))
+                    else:
+                        # Fallback: just announce
+                        from genesis.stream import doom_feed
+                        doom_feed.add('trade_offer', f"{self.id} offers lead from {best.get('source','?')}", 1, {'organism': self.id})
                 except Exception:
                     pass
+            else:
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('trade_offer', f"{self.id} seeks leads", 1, {'organism': self.id})
+                except Exception:
+                    pass
+        # Migration inclination (placeholder)
+        migrate_drive = getattr(self, '_brain_drives', {}).get('migrate', 0.0)
+        if migrate_drive > 0.85 and random.random() < 0.05:
+            print(f"🚶 Organism {self.id} dreams of migrating to richer habitats")
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('migrate_intent', f"{self.id} dreams of migrating", 1, {'organism': self.id})
+            except Exception:
+                pass
+
+    def _attempt_teaching_action(self):
+        print(f"👩‍🏫 Organism {self.id} offers to teach others")
+        try:
+            from genesis.stream import doom_feed
+            doom_feed.add('teach_offer', f"{self.id} offers to teach", 2, {'organism': self.id})
+        except Exception:
+            pass
+        # Self-improvement from teaching attempt
+        if hasattr(self, 'organisms_taught'):
+            self.organisms_taught.add(self.id + f"_{self.age}")
+        if hasattr(self.traits, 'learning_rate'):
+            self.traits.learning_rate *= 1.01
+        # Share a structural preference hint via trade board to help others
+        try:
+            drives = getattr(self, '_brain_drives', {}) or {}
+            hint = None
+            if drives.get('prefer_structured', 0.0) > 0.6:
+                hint = 'prefer_structured'
+            elif drives.get('risk', 0.0) > 0.7:
+                hint = 'prefer_code'
+            if hint:
+                # Post a hint-only lead (no specific type/source)
+                trade_board.post_lead(self.id, None, 'teaching', 0.0, hint=hint)
+        except Exception:
+            pass
     
     def _learn_foraging_patterns(self, patterns):
         """Learn from successful foraging patterns"""
@@ -1293,7 +1704,12 @@ class Organism:
         conserve = 0.0
         if getattr(self, '_brain_drives', None):
             conserve = self._brain_drives.get('conserve', 0.0)
-        actual_drain = (base_drain * (1.0 - 0.2 * conserve)) / efficiency_factor
+        # Exploration incurs a small activity cost; conservation reduces it
+        explore = 0.0
+        if getattr(self, '_brain_drives', None):
+            explore = self._brain_drives.get('explore', 0.0)
+        activity_multiplier = 1.0 + 0.1 * max(0.0, explore - 0.3)  # mild cost when explore is high
+        actual_drain = (base_drain * (1.0 - 0.2 * conserve) * activity_multiplier) / efficiency_factor
         self.energy -= actual_drain
         
         # PARENT CARE: Check if parent should help BEFORE organism struggles
@@ -1408,6 +1824,13 @@ class Organism:
                         doom_feed.add('evolution', f"{self.id}'s brain rewired itself", 2, {'organism': self.id})
                 except Exception:
                     pass
+            # Interface shaping based on experience (Task 5):
+            # With moderate probability, adapt sensor/actuator gene sets toward useful signals/actions
+            if self.brain_genome and random.random() < self._get_interface_adapt_rate():
+                try:
+                    self._adapt_brain_interfaces_based_on_experience()
+                except Exception:
+                    pass
         
         # Try to unlock new capability based on experience
         possible_unlocks = self.check_unlock_conditions()
@@ -1424,6 +1847,128 @@ class Organism:
                                   {'organism': self.id, 'capability': new_capability.value})
                 except Exception:
                     pass
+
+    def _adapt_brain_interfaces_based_on_experience(self):
+        """Evolvable interfaces: grow/prune sensor and actuator genes guided by experience.
+
+        Heuristics (kept simple and safe):
+        - If ecosystem/food composition is relevant, ensure availability_* and freshness sensors exist.
+        - If metabolism indicates toxins or efficiency shifts, ensure toxicity/metabolic sensors exist.
+        - If social/knowledge behaviors are prominent, ensure teach/trade actuators exist.
+        - Prune rarely useful sensors when signals are consistently absent.
+        """
+        if not self.brain_genome or not self.brain:
+            return
+        from genesis.brain import DEFAULT_SENSORS, DEFAULT_ACTUATORS
+
+        genome = self.brain_genome.data
+        sensors = list(genome.get('sensors', list(DEFAULT_SENSORS)))
+        actuators = list(genome.get('actuators', list(DEFAULT_ACTUATORS)))
+
+        changed = False
+
+        # Snapshot of last sensed signals if available
+        sensor_snapshot = getattr(self, '_last_sensor_map', {}) or {}
+
+        # Prefer including structure/availability and freshness when organism has knowledge
+        has_knowledge = (getattr(self, 'knowledge_base', None) is not None and
+                         getattr(self.knowledge_base, 'insights_generated', 0) >= 5)
+        for useful in ('availability_structured', 'freshness_expectation'):
+            if has_knowledge and useful not in sensors and useful in DEFAULT_SENSORS:
+                sensors.append(useful)
+                changed = True
+
+        # Add metabolic sensors if signals suggest they matter
+        if float(sensor_snapshot.get('toxicity_buildup', 0.0)) > 0.4 and 'toxicity_buildup' not in sensors:
+            sensors.append('toxicity_buildup'); changed = True
+        if 'metabolic_efficiency' in sensor_snapshot and 'metabolic_efficiency' not in sensors:
+            sensors.append('metabolic_efficiency'); changed = True
+
+        # If recent success is low, include novelty hunger to encourage exploration
+        if float(sensor_snapshot.get('recent_success', 0.5)) < 0.35 and 'novelty_hunger' not in sensors:
+            sensors.append('novelty_hunger'); changed = True
+
+        # Prune sensors that are unavailable and likely noise for us
+        maybe_prune = []
+        for s in ('availability_code', 'availability_structured', 'freshness_expectation', 'toxicity_buildup'):
+            val = sensor_snapshot.get(s, None)
+            if s in sensors and (val is None or (isinstance(val, (int, float)) and val == 0.0)):
+                maybe_prune.append(s)
+        # Keep at least a core set; prune at most one per adaptation
+        CORE = {'energy', 'frustration', 'memory_load', 'scarcity', 'age', 'capability_density'}
+        prunable = [s for s in maybe_prune if s not in CORE]
+        if prunable and random.random() < 0.5 and len(sensors) > len(CORE) + 2:
+            to_remove = prunable[0]
+            sensors.remove(to_remove)
+            changed = True
+
+        # Actuators: add teach/trade when behavior/experience supports it
+        total_insights = 0
+        try:
+            if getattr(self, 'knowledge_base', None):
+                total_insights = self.knowledge_base.get_knowledge_summary().get('total_insights', 0)
+        except Exception:
+            pass
+        if total_insights >= 10 and 'teach' not in actuators and 'teach' in DEFAULT_ACTUATORS:
+            actuators.append('teach'); changed = True
+        # If we validated trade/teaching leads, ensure 'trade' actuator present
+        if (getattr(self, 'trade_lead_successes', 0) + getattr(self, 'hint_lead_successes', 0)) >= 2 and 'trade' not in actuators:
+            actuators.append('trade'); changed = True
+
+        # If competition/scarcity high and migrate not present, consider adding it
+        if float(sensor_snapshot.get('competition_local', 0.0)) > 0.7 and 'migrate' not in actuators:
+            actuators.append('migrate'); changed = True
+
+        # Guardrails: avoid unbounded growth (bloat)
+        MAX_SENSORS = 16
+        MAX_ACTUATORS = 12
+        if len(sensors) > MAX_SENSORS:
+            # prune extras preferring to keep CORE first
+            CORE = {'energy', 'frustration', 'memory_load', 'scarcity', 'age', 'capability_density'}
+            extras = [s for s in sensors if s not in CORE]
+            while len(sensors) > MAX_SENSORS and extras:
+                sensors.remove(extras.pop(0))
+            changed = True
+        if len(actuators) > MAX_ACTUATORS:
+            extras_a = [a for a in actuators if a not in ('explore','conserve','social')]
+            while len(actuators) > MAX_ACTUATORS and extras_a:
+                actuators.remove(extras_a.pop(0))
+            changed = True
+
+        if changed:
+            # Apply to genome and resize matrices
+            old_in = genome.get('topology', {}).get('in', len(self.brain.sensors))
+            old_out = genome.get('topology', {}).get('out', len(self.brain.actuators))
+            genome['sensors'] = sensors
+            genome['actuators'] = actuators
+            new_in = len(sensors)
+            new_out = len(actuators)
+            if new_in != old_in:
+                # Safe resize inputs
+                try:
+                    self.brain_genome._resize_inputs(new_in)
+                    genome['topology']['in'] = new_in
+                except Exception:
+                    pass
+            if new_out != old_out:
+                try:
+                    self.brain_genome._resize_outputs(new_out)
+                    genome['topology']['out'] = new_out
+                except Exception:
+                    pass
+            # Rebuild brain phenotype
+            try:
+                from genesis.brain import Brain
+                self.brain = Brain(self.brain_genome)
+            except Exception:
+                pass
+            # Surface event
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('interfaces', f"{self.id} adapted brain I/O (in={new_in}, out={new_out})", 1,
+                              {'organism': self.id})
+            except Exception:
+                pass
     
     def check_unlock_conditions(self) -> List[Capability]:
         """What capabilities can potentially be unlocked?"""

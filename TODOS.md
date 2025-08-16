@@ -55,14 +55,21 @@ Deferred follow-ups (new tasks):
 - Dual-system brain (instinctual vs intellectual) with clean interfaces
 - Deeper actuator-to-action coverage (communication/community/teaching intensity)
 
-### 🟡 Task 5: Evolvable Interfaces (Sensors & Actuators)
+### ✅ Task 5: Evolvable Interfaces (Sensors & Actuators)
 File: genesis/brain.py, genesis/evolution.py, data_sources/
-Status: IN PROGRESS (partial groundwork exists in Task 4)
-Scope:
-- Encode sensor and actuator genes (DONE in Task 4) and wire them to real environmental inputs/outputs more broadly
-- Let organisms evolve which environmental signals they sense (e.g., scarcity signals, food freshness, toxicity risk)
-- Expand actuator outputs to real actions (e.g., explicit teaching, trading, migration decisions) and map them safely
-- Keep logs readable by surfacing high-level intent from actuators
+Status: COMPLETED
+Recent work:
+- Experience-guided interface adaptation: organisms now add/prune sensor and actuator genes based on their lived signals and successes (e.g., add freshness/availability when knowledge grows; add toxicity/metabolic sensors when relevant; add teach/trade actuators when behaviors succeed). See Organism._adapt_brain_interfaces_based_on_experience() in genesis/evolution.py.
+- Automatic, safe topology resizing follows interface changes (uses BrainGenome input/output resizers) and rebuilds phenotype; emits a low-noise 'interfaces' event to the doom feed.
+- Actuator-to-behavior mapping tightened: trade/teach/migrate/conserve/risk/prefer_structured signals continue to bias foraging and communication and now gain persistence pressure via interface adaptation.
+- Migration actuator is now a real in-sim action via lightweight virtual regions; organisms switch regions based on migrate drive and other drives (prefer_structured/risk/conserve). DataEcosystem applies region bias to food scoring.
+- Fitness-linked selection pressure: dynamic interface adaptation rate increases when struggling (low foraging success/toxicity high) and decreases when succeeding, stabilizing beneficial interfaces. Guardrails prevent I/O bloat (caps for sensors/actuators with safe pruning).
+- Additional sensors exposed: type-specific scarcity sensors (scarcity_structured, scarcity_code) computed from ecosystem composition and added to the default sensor vocabulary.
+- Tests added: test_task5_interfaces.py exercises interface adaptation (with assertions) and deterministic migration via a test flag.
+
+Remaining (future work):
+- Extend migration to multi-host P2P (Task 12) once network lands.
+- Broader multi-organism convergence tests and minor heuristic tuning as the ecosystem expands.
 
 ### 🟡 Task 6: Multi-Organism Interactions
 File: genesis/ecosystem.py

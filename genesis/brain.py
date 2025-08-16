@@ -21,11 +21,37 @@ import random
 from typing import Dict, List
 
 # Allowed sensor/actuator genes
+# Keep the base set small and evolvable, but include several
+# real-world ecosystem signals so brains can wire to them over time.
 DEFAULT_SENSORS = [
-    'energy', 'frustration', 'memory_load', 'scarcity', 'age', 'capability_density'
+    'energy',
+    'frustration',
+    'memory_load',
+    'scarcity',
+    'age',
+    'capability_density',
+    # Extended environmental/physiological signals used by evolution.py
+    'scarcity_global',            # alias for ecosystem scarcity
+    'freshness_expectation',      # expected average freshness in ecosystem
+    'availability_structured',    # proportion of structured data available
+    'availability_code',          # proportion of code available
+    'scarcity_structured',        # scarcity signal per type (1 - availability)
+    'scarcity_code',              # scarcity signal per type (1 - availability)
+    'toxicity_buildup',           # tracked by metabolic system
+    'competition_local',          # local competition/pressure proxy
+    'recent_success',             # recent foraging success rate
+    'metabolic_efficiency',       # derived from metabolic tracker
+    'novelty_hunger',             # desire for novelty vs repetition
 ]
 DEFAULT_ACTUATORS = [
-    'explore', 'social', 'conserve', 'prefer_structured', 'risk'
+    'explore',
+    'social',
+    'conserve',
+    'prefer_structured',
+    'risk',
+    'teach',
+    'trade',
+    'migrate',                    # intent to migrate to other habitat/host (logged only for now)
 ]
 
 

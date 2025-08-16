@@ -267,6 +267,35 @@ class DataEcosystem:
         self.available_food = []
         self.consumed_food = []
         self.food_scarcity = 1.0  # 1.0 = abundant, 0.0 = scarce
+
+        # Virtual regions: lightweight habitat biases for migration experiments
+        # Bias multipliers (>1 favors, <1 disfavors)
+        self.region_biases = {
+            'default': {
+                DataType.SIMPLE_TEXT: 1.0,
+                DataType.STRUCTURED_JSON: 1.0,
+                DataType.XML_DATA: 1.0,
+                DataType.CODE: 1.0,
+            },
+            'structured-rich': {
+                DataType.SIMPLE_TEXT: 1.0,
+                DataType.STRUCTURED_JSON: 1.3,
+                DataType.XML_DATA: 1.2,
+                DataType.CODE: 0.9,
+            },
+            'code-rich': {
+                DataType.SIMPLE_TEXT: 0.8,
+                DataType.STRUCTURED_JSON: 1.0,
+                DataType.XML_DATA: 0.9,
+                DataType.CODE: 1.4,
+            },
+            'text-meadow': {
+                DataType.SIMPLE_TEXT: 1.5,
+                DataType.STRUCTURED_JSON: 0.9,
+                DataType.XML_DATA: 0.9,
+                DataType.CODE: 0.6,
+            },
+        }
         
         # Start file watching
         self.file_harvester.start_watching()
@@ -358,13 +387,42 @@ class DataEcosystem:
             return None
         
         # Apply preferences and scarcity
-        if preferences and 'preferred_types' in preferences:
-            preferred = [m for m in suitable_food if m.data_type in preferences['preferred_types']]
-            if preferred:
-                suitable_food = preferred
+        if preferences:
+            # Preferred data types
+            if 'preferred_types' in preferences:
+                preferred = [m for m in suitable_food if m.data_type in preferences['preferred_types']]
+                if preferred:
+                    suitable_food = preferred
+            # Filter by minimum freshness
+            min_fresh = preferences.get('min_freshness')
+            if isinstance(min_fresh, (int, float)):
+                suitable_food = [m for m in suitable_food if m.freshness >= max(0.0, min(1.0, float(min_fresh)))]
+            # Toxicity avoidance (deprioritize code)
+            if preferences.get('toxicity_avoid_code'):
+                non_code = [m for m in suitable_food if m.data_type != DataType.CODE]
+                if non_code:
+                    suitable_food = non_code
         
-        # Sort by energy value and freshness
-        suitable_food.sort(key=lambda m: m.energy_value * m.freshness, reverse=True)
+        # Sort by energy value, freshness, and optional preferences (difficulty, region)
+        prefs = preferences or {}
+        difficulty_pref = prefs.get('difficulty_preference')
+        region = prefs.get('region')
+        region_bias = self.region_biases.get(region) if region else None
+
+        def score(m: DataMorsel) -> float:
+            base = m.energy_value * m.freshness
+            if difficulty_pref == 'low':
+                # Prefer easier items (difficulty 1 best)
+                base *= 1.0 / (1.0 + 0.3 * max(0, m.difficulty - 1))
+            elif difficulty_pref == 'high':
+                # Prefer challenging items
+                base *= 1.0 + 0.3 * max(0, m.difficulty - 1)
+            # Region bias multipliers
+            if region_bias is not None:
+                base *= float(region_bias.get(m.data_type, 1.0))
+            return base
+
+        suitable_food.sort(key=score, reverse=True)
         
         # Apply scarcity - organism might not find food if scarce
         if self.food_scarcity < 0.5 and len(suitable_food) > 0:
