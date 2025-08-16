@@ -659,10 +659,16 @@ class Organism:
             base_attempts += 1  # Memory = learn good spots
         if self.energy < 30:
             base_attempts += 2  # Desperation = more searching
-        # Brain exploration drive gives a small bonus attempt
+        # Brain exploration drive gives bonus attempts
         if getattr(self, '_brain_drives', None):
-            if self._brain_drives.get('explore', 0.0) > 0.5:
+            exp = self._brain_drives.get('explore', 0.0)
+            if exp > 0.5:
                 base_attempts += 1
+            if exp > 0.8:
+                base_attempts += 1
+            # High conserve drive reduces unnecessary searching when safe
+            if self.energy > 40 and self._brain_drives.get('conserve', 0.0) > 0.8:
+                base_attempts = max(1, base_attempts - 1)
         
         successful_forages = 0
         foraging_patterns = []
@@ -709,7 +715,7 @@ class Organism:
         if not self.brain:
             self._brain_drives = None
             return
-        # Build a small input vector: [energy, frustration, memory_load, scarcity]
+        # Build input vector from brain sensors gene list
         energy_norm = max(0.0, min(1.0, self.energy / 100.0))
         frustration = max(0.0, min(1.0, getattr(self, 'frustration', 0.0)))
         memory_load = max(0.0, min(1.0, len(self.memory) / 100.0))
@@ -717,15 +723,29 @@ class Organism:
         if data_ecosystem:
             eco = data_ecosystem.get_ecosystem_stats()
             scarcity = 1.0 - max(0.0, min(1.0, eco.get('food_scarcity', 1.0)))
-        inputs = [energy_norm, frustration, memory_load, scarcity]
+        age_norm = max(0.0, min(1.0, self.age / 500.0))
+        cap_norm = max(0.0, min(1.0, len(self.capabilities) / 10.0))
+        sensor_map = {
+            'energy': energy_norm,
+            'frustration': frustration,
+            'memory_load': memory_load,
+            'scarcity': scarcity,
+            'age': age_norm,
+            'capability_density': cap_norm
+        }
+        sensors = getattr(self.brain, 'sensors', ['energy','frustration','memory_load','scarcity','age','capability_density'])
+        inputs = [sensor_map.get(s, 0.0) for s in sensors]
         try:
             outputs = self.brain.forward(inputs)
-            # Map outputs to [0,1] via simple squashing
+            # Map outputs to [0,1] via simple squashing in actuator order
             def squash(x):
                 return max(0.0, min(1.0, 0.5 + (x / 4.0)))
-            explore = squash(outputs[0] if len(outputs) > 0 else 0.0)
-            social = squash(outputs[1] if len(outputs) > 1 else 0.0)
-            self._brain_drives = {'explore': explore, 'social': social}
+            actuators = getattr(self.brain, 'actuators', ['explore','social','conserve','prefer_structured','risk'])
+            drives = {}
+            for i, name in enumerate(actuators):
+                val = outputs[i] if i < len(outputs) else 0.0
+                drives[name] = squash(val)
+            self._brain_drives = drives
         except Exception:
             self._brain_drives = None
     
@@ -735,12 +755,37 @@ class Organism:
         # Different exploration strategies based on attempt number
         if attempt_number == 0:
             # Standard foraging
-            return data_ecosystem.find_food_for_organism(self.capabilities)
+            prefs = None
+            # Use brain preference for structured data when available
+            if getattr(self, '_brain_drives', None):
+                prefer_struct = self._brain_drives.get('prefer_structured', 0.0)
+                if prefer_struct > 0.6:
+                    from data_sources.harvesters import DataType
+                    prefs = {'preferred_types': [DataType.STRUCTURED_JSON, DataType.CODE]}
+            # Occasionally surface strategy in feed to make logs interesting
+            try:
+                if prefs and random.random() < 0.2:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('strategy', f"{self.id} seeks structured data", 1, {'organism': self.id})
+            except Exception:
+                pass
+            return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         elif attempt_number == 1:
             # Try different food preferences if organism can pattern match
             if self.has_capability(Capability.PATTERN_MATCH):
                 from data_sources.harvesters import DataType
+                # Brain may bias towards code-only or json-only
                 preferences = {'preferred_types': [DataType.STRUCTURED_JSON, DataType.CODE]}
+                if getattr(self, '_brain_drives', None):
+                    risk = self._brain_drives.get('risk', 0.0)
+                    if risk > 0.7:
+                        preferences = {'preferred_types': [DataType.CODE]}
+                        try:
+                            if random.random() < 0.2:
+                                from genesis.stream import doom_feed
+                                doom_feed.add('strategy', f"{self.id} risks code-only forage", 1, {'organism': self.id})
+                        except Exception:
+                            pass
                 return data_ecosystem.find_food_for_organism(self.capabilities, preferences)
         elif attempt_number == 2:
             # Memory-based foraging - try to remember good food sources
@@ -751,7 +796,14 @@ class Organism:
                         return food
         else:
             # Desperate exploration - try any available food
-            return data_ecosystem.find_food_for_organism(self.capabilities)
+            prefs = None
+            if getattr(self, '_brain_drives', None):
+                risk = self._brain_drives.get('risk', 0.0)
+                if risk > 0.6:
+                    # Try code first when risky
+                    from data_sources.harvesters import DataType
+                    prefs = {'preferred_types': [DataType.CODE, DataType.XML_DATA]}
+            return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         
         return None
     
@@ -895,7 +947,7 @@ class Organism:
     
     def exhibit_knowledge_based_behaviors(self):
         """EMERGENT BEHAVIORS: Organisms act differently based on their real knowledge"""
-        
+
         if not hasattr(self, 'knowledge_base'):
             return
         
@@ -1011,6 +1063,24 @@ class Organism:
                         if 'desired_capabilities' not in self.evolution_pressure:
                             self.evolution_pressure['desired_capabilities'] = []
                         self.evolution_pressure['desired_capabilities'].append(Capability.TEACH)
+
+        # BRAIN-INFLUENCED BEHAVIOR MODIFIERS
+        if getattr(self, '_brain_drives', None):
+            drives = self._brain_drives
+            # Initialize container if needed
+            if not hasattr(self, '_behavior_modifiers'):
+                self._behavior_modifiers = {}
+            # Update soft biases from actuators
+            self._behavior_modifiers['structure_bias'] = drives.get('prefer_structured', 0.0)
+            self._behavior_modifiers['risk_bias'] = drives.get('risk', 0.0)
+            self._behavior_modifiers['social_bias'] = drives.get('social', 0.0)
+            # Nudge traits slightly based on drives
+            if hasattr(self.traits, 'risk_taking'):
+                self.traits.risk_taking = min(1.0, max(0.0, self.traits.risk_taking * (1.0 + (drives.get('risk', 0.0) - 0.5) * 0.05)))
+            if hasattr(self.traits, 'cooperation'):
+                self.traits.cooperation = min(1.0, max(0.0, self.traits.cooperation * (1.0 + (drives.get('social', 0.0) - 0.5) * 0.04)))
+            if hasattr(self.traits, 'efficiency'):
+                self.traits.efficiency = min(1.0, max(0.0, self.traits.efficiency * (1.0 + (drives.get('conserve', 0.0) - 0.5) * 0.03)))
     
     def communicate_with_other_organisms(self):
         """Simple communication system between organisms"""
@@ -1136,7 +1206,11 @@ class Organism:
         if hasattr(self, 'energy_efficiency'):
             efficiency_factor = max(0.3, self.energy_efficiency)
         
-        actual_drain = base_drain / efficiency_factor
+        # Conserve drive can slightly reduce energy drain
+        conserve = 0.0
+        if getattr(self, '_brain_drives', None):
+            conserve = self._brain_drives.get('conserve', 0.0)
+        actual_drain = (base_drain * (1.0 - 0.2 * conserve)) / efficiency_factor
         self.energy -= actual_drain
         
         # PARENT CARE: Check if parent should help BEFORE organism struggles
@@ -1229,6 +1303,11 @@ class Organism:
             self.traits.mutate()
             # Occasionally mutate brain genome as part of organism evolution
             if self.brain_genome and random.random() < 0.05:
+                # Snapshot old hidden size to report growth/pruning
+                try:
+                    old_hid = self.brain_genome.data.get('topology', {}).get('hid', None)
+                except Exception:
+                    old_hid = None
                 self.brain_genome.mutate()
                 try:
                     from genesis.brain import Brain
@@ -1237,7 +1316,13 @@ class Organism:
                     pass
                 try:
                     from genesis.stream import doom_feed
-                    doom_feed.add('evolution', f"{self.id}'s brain rewired itself", 2, {'organism': self.id})
+                    new_hid = self.brain_genome.data.get('topology', {}).get('hid', old_hid)
+                    if old_hid is not None and new_hid is not None and new_hid != old_hid:
+                        change = 'grew' if new_hid > old_hid else 'pruned'
+                        doom_feed.add('evolution', f"{self.id}'s brain {change} hidden layer {old_hid}->{new_hid}", 2,
+                                      {'organism': self.id})
+                    else:
+                        doom_feed.add('evolution', f"{self.id}'s brain rewired itself", 2, {'organism': self.id})
                 except Exception:
                     pass
         

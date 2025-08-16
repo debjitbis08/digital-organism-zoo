@@ -43,8 +43,10 @@ Status: COMPLETED
 
 ### 🟡 Task 4: Neuroevolutionary Brain Structures
 File: genesis/brain.py
-Status: PARTIAL (minimal MLP genome, mutation, forward(); integrated for drives)
-Next: Topology mutation, sensor/actuator genes, richer decision mapping
+Status: PARTIAL (topology mutation for hidden layer; inputs/outputs expanded; sensor/actuator genes; drives influence energy/foraging and traits)
+Next:
+- Richer decision/action mapping from actuators (strategy selection, communication/teaching intensity)
+- Consider dual-system brain architecture (instinctual vs intellectual modules) with separate fast/slow paths
 
 ### 🟡 Task 5: Evolvable Interfaces (Sensors & Actuators)
 File: genesis/brain.py
