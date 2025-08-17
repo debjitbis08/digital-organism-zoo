@@ -137,39 +137,142 @@ class NutritionDatabase:
         """Get nutritional profile for a data type"""
         return self.profiles.get(data_type, self.profiles[DataType.SIMPLE_TEXT])
     
-    def calculate_effective_energy(self, morsel: DataMorsel, organism_state: Dict) -> Tuple[int, Dict]:
-        """Calculate actual energy gained considering organism state"""
+    def calculate_effective_energy(self, morsel: DataMorsel, organism) -> Tuple[int, Dict]:
+        """Compute energy from digestion quality rather than food type.
+
+        Implements: ΔE = η * sigmoid(Q - θ) - (token + cpu + io + parent costs)
+        with Q = wC*C + wR*R + wN*N + wK*K + wS*S - penalties.
+        """
+        # Helper: sigmoid with gentle slope
+        def sigmoid(x: float) -> float:
+            return 1.0 / (1.0 + math.exp(-3.0 * x))
+
+        text = morsel.content or ""
+        size = max(1, int(morsel.size or len(text)))
+        tokens = [t for t in text.split() if t]
+        n_tokens = max(1, len(tokens))
+
+        # C: compressibility ~ redundancy (1 - unique ratio)
+        unique_ratio = len(set(tokens)) / n_tokens if n_tokens > 0 else 1.0
+        C = max(0.0, min(1.0, 1.0 - unique_ratio))
+
+        # Build a lightweight memory/token index from organism memory and knowledge
+        mem_tokens: List[str] = []
+        try:
+            if hasattr(organism, 'memory'):
+                for m in organism.memory[-50:]:
+                    mem_tokens.extend(str(m).lower().split())
+            if hasattr(organism, 'knowledge_base') and getattr(organism.knowledge_base, 'knowledge_items', None):
+                for ki in organism.knowledge_base.knowledge_items[-20:]:
+                    mem_tokens.extend([str(k).lower() for k in getattr(ki, 'keywords', [])])
+        except Exception:
+            pass
+        mem_set = set(mem_tokens) if mem_tokens else set()
+
+        # R: recall ~ overlap with memory
+        overlap = 0
+        if mem_set:
+            overlap = sum(1 for t in set(map(str.lower, tokens)) if t in mem_set)
+        R = max(0.0, min(1.0, overlap / max(1, len(set(tokens)))))
+
+        # N: novelty ~ new vs memory
+        N = max(0.0, min(1.0, 1.0 - R))
+
+        # Prepare brain inputs (type-agnostic energy; use freshness, size, difficulty)
+        data_energy_norm = max(0.0, min(1.0, float(getattr(morsel, 'energy_value', 10)) / 30.0))
+        data_freshness = max(0.0, min(1.0, float(getattr(morsel, 'freshness', 1.0))))
+        data_difficulty = max(0.0, min(1.0, float(getattr(morsel, 'difficulty', 1)) / 5.0))
+        data_size = max(0.0, min(1.0, float(size) / 10000.0))
+
+        # K: coherence ~ concentration of brain outputs (low entropy distribution)
+        K = 0.5
+        # S: stability ~ robustness to slight noise in inputs
+        S = 0.5
+        try:
+            if hasattr(organism, 'brain') and organism.brain is not None:
+                # Build sensor map similar to evolution.py
+                sensor_map = {}
+                if hasattr(organism, '_last_sensor_map') and isinstance(organism._last_sensor_map, dict):
+                    sensor_map.update(organism._last_sensor_map)
+                sensor_map.update({
+                    'data_energy': data_energy_norm,
+                    'data_freshness': data_freshness,
+                    'data_difficulty': data_difficulty,
+                    'data_size': data_size,
+                    'data_type_text': 1.0 if morsel.data_type.value == 'simple_text' else 0.0,
+                    'data_type_structured': 1.0 if morsel.data_type.value == 'structured_json' else 0.0,
+                    'data_type_xml': 1.0 if morsel.data_type.value == 'xml_data' else 0.0,
+                    'data_type_code': 1.0 if morsel.data_type.value == 'code' else 0.0,
+                })
+                inputs = [float(sensor_map.get(k, 0.0)) for k in getattr(organism.brain, 'sensors', [])]
+                y = organism.brain.forward(inputs) or []
+                # Coherence via normalized entropy of positive activations
+                vals = [max(0.0, float(v)) for v in y]
+                s = sum(vals)
+                if s > 1e-6:
+                    p = [v / s for v in vals]
+                    # Entropy H
+                    H = -sum(pi * math.log(pi + 1e-12) for pi in p if pi > 0)
+                    Hmax = math.log(max(1, len(p)))
+                    if Hmax > 0:
+                        K = max(0.0, min(1.0, 1.0 - (H / Hmax)))
+                # Stability via small perturbation
+                eps = 0.02
+                perturbed = [v + (random.random() * 2 - 1) * eps for v in inputs]
+                y2 = organism.brain.forward(perturbed) or []
+                # Average absolute diff normalized
+                if y and y2 and len(y) == len(y2):
+                    diff = sum(abs(float(y[i]) - float(y2[i])) for i in range(len(y))) / len(y)
+                    S = max(0.0, min(1.0, 1.0 - diff))
+        except Exception:
+            pass
+
+        # Weights and penalties
+        wC = 1.0; wR = 1.0; wN = 1.0; wK = 1.0; wS = 1.0
+        penalties = 0.0
+        # Slight toxicity penalty for very difficult binary-like inputs
         profile = self.get_nutritional_profile(morsel.data_type)
-        
-        # Base energy calculation
-        base_energy = profile.base_energy
-        
-        # Size multiplier (larger data = more energy, but diminishing returns)
-        size_multiplier = 1.0 + math.log(max(1, morsel.size / 100)) * 0.1
-        
-        # Freshness impact
-        freshness_multiplier = morsel.freshness
-        
-        # Organism state impacts
-        state_multipliers = self._calculate_state_multipliers(profile, organism_state)
-        
-        # Calculate final energy
-        effective_energy = int(
-            base_energy * 
-            size_multiplier * 
-            freshness_multiplier * 
-            state_multipliers['energy']
-        )
-        
-        # Calculate metabolic effects
+        if profile.toxicity > 0.0:
+            penalties += profile.toxicity * 0.05
+
+        Q = wC*C + wR*R + wN*N + wK*K + wS*S - penalties
+        # Center Q roughly around 0.5
+        theta = 0.5
+        eta = 20.0  # energy scale
+
+        # Operational costs (token, cpu, io, parent)
+        token_cost = n_tokens / 80.0  # ~0.0125 per token
+        cpu_cost = float(getattr(morsel, 'difficulty', 1)) * 0.6
+        io_cost = size / 4000.0  # small I/O drag
+        parent_cost = 0.0
+        try:
+            if hasattr(organism, 'parent_help_received') and organism.parent_help_received > 0:
+                parent_cost = min(3.0, 0.5 * organism.parent_help_received)
+        except Exception:
+            pass
+        total_costs = token_cost + cpu_cost + io_cost + parent_cost
+
+        energy_float = eta * sigmoid(Q - theta) - total_costs
+        effective_energy = max(0, int(round(energy_float)))
+
+        # Derived boosts from metrics (temporary, small)
+        learning_boost = 0.1 * C + 0.05 * K
+        curiosity_boost = 0.1 * N
+        creativity_boost = 0.05 * K
+        toxicity_damage = max(0.0, profile.toxicity * (1.0 - S) * 0.1)
+
         effects = {
             'energy_gained': effective_energy,
-            'learning_boost': profile.learning_boost * state_multipliers['learning'],
-            'curiosity_boost': profile.curiosity_boost * state_multipliers['curiosity'],
-            'creativity_boost': profile.creativity_boost * state_multipliers['creativity'],
-            'toxicity_damage': profile.toxicity * state_multipliers['toxicity']
+            'learning_boost': learning_boost,
+            'curiosity_boost': curiosity_boost,
+            'creativity_boost': creativity_boost,
+            'toxicity_damage': toxicity_damage,
+            # Debug/analysis fields
+            'Q': Q,
+            'metrics': {'C': C, 'R': R, 'N': N, 'K': K, 'S': S},
+            'costs': {'token': token_cost, 'cpu': cpu_cost, 'io': io_cost, 'parent': parent_cost},
         }
-        
+
         return effective_energy, effects
     
     def _calculate_state_multipliers(self, profile: NutritionalProfile, organism_state: Dict) -> Dict[str, float]:
@@ -290,17 +393,12 @@ class ScarcityManager:
     def apply_scarcity_effects(self, morsel: DataMorsel) -> DataMorsel:
         """Modify food morsel based on scarcity conditions"""
         
-        # Scarcity makes food less nutritious (desperation eating)
-        scarcity_factor = max(0.3, self.global_scarcity)
-        morsel.energy_value = int(morsel.energy_value * scarcity_factor)
-        
         # Competition makes food decay faster
         competition_decay = 1.0 + self.competition_pressure
         morsel.decay_freshness(competition_decay)
         
-        # High competition might make food "contaminated" (lower quality)
-        if self.competition_pressure > 0.7 and random.random() < 0.3:
-            morsel.energy_value = int(morsel.energy_value * 0.7)
+        # Do not mutate energy_value here; usable energy is computed from
+        # digestion quality downstream.
         
         return morsel
     
@@ -453,22 +551,13 @@ def create_enhanced_nutrition_system():
 def process_organism_feeding(organism, morsel: DataMorsel, nutrition_system: Dict) -> Dict:
     """Process organism feeding with enhanced nutrition"""
     
-    # Get organism state
-    organism_state = {
-        'energy': organism.energy,
-        'age': organism.age,
-        'frustration': organism.frustration,
-        'intelligence': organism.intelligence,
-        'capabilities': organism.capabilities
-    }
-    
-    # Calculate nutritional effects
-    nutrition_db = nutrition_system['nutrition_db']
-    energy_gained, effects = nutrition_db.calculate_effective_energy(morsel, organism_state)
-    
-    # Apply scarcity effects
+    # Apply scarcity effects first (freshness decay etc.)
     scarcity_manager = nutrition_system['scarcity_manager']
     modified_morsel = scarcity_manager.apply_scarcity_effects(morsel)
+
+    # Calculate nutritional effects based on digestion quality
+    nutrition_db = nutrition_system['nutrition_db']
+    energy_gained, effects = nutrition_db.calculate_effective_energy(modified_morsel, organism)
     
     # Track consumption
     metabolic_tracker = nutrition_system['metabolic_tracker']

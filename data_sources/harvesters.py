@@ -48,7 +48,9 @@ class DataMorsel:
         """Food gets stale over time"""
         decay_rate = 0.1  # 10% per hour
         self.freshness = max(0.0, self.freshness - (decay_rate * time_passed / 3600))
-        self.energy_value = int(self.energy_value * self.freshness)
+        # Freshness decays over time, but intrinsic energy_value is no longer
+        # tied to the data type. We keep energy_value stable here and let the
+        # nutrition system compute usable energy from digestion quality.
     
     def is_consumable_by_capabilities(self, capabilities: set) -> bool:
         """Check if organism has capabilities to digest this data"""
@@ -90,13 +92,15 @@ class RSSFeedHarvester:
                         # Create morsel from RSS entry
                         content = f"Title: {entry.title}\nSummary: {getattr(entry, 'summary', '')}"
                         
+                        # Base energy_value is now size-driven and neutral to type.
+                        base_energy = int(5 + min(25, len(content) // 400))
                         morsel = DataMorsel(
                             data_type=DataType.XML_DATA,
                             content=content,
                             size=len(content),
                             source=f"RSS:{feed.feed.title}",
                             timestamp=time.time(),
-                            energy_value=15,  # RSS feeds are nutritious
+                            energy_value=base_energy,
                             difficulty=2
                         )
                         morsels.append(morsel)
@@ -160,13 +164,8 @@ class FileSystemHarvester(FileSystemEventHandler):
                 
                 data_type = self.file_extensions[extension]
                 
-                # Calculate energy value based on type and size
-                base_energy = {
-                    DataType.SIMPLE_TEXT: 5,
-                    DataType.STRUCTURED_JSON: 12,
-                    DataType.XML_DATA: 10,
-                    DataType.CODE: 25
-                }.get(data_type, 5)
+                # Calculate energy value based on size only (type-agnostic)
+                base_energy = 8
                 # Chunking
                 chunks = []
                 total_len = len(content)
@@ -179,7 +178,7 @@ class FileSystemHarvester(FileSystemEventHandler):
                 while i < total_len and len(chunks) < max_chunks:
                     piece = content[i:i+step]
                     i += step
-                    # Scale energy with chunk size (sublinear)
+                    # Scale energy with chunk size (sublinear) and ignore type
                     size = len(piece)
                     energy = int(max(1, base_energy * (1.0 + min(5.0, size / 2000.0))))
                     morsel = DataMorsel(
@@ -212,13 +211,13 @@ class APIHarvester:
             {
                 'url': 'https://api.github.com/events',
                 'name': 'GitHub Events',
-                'energy': 20,
+                'energy': 12,
                 'type': DataType.STRUCTURED_JSON
             },
             {
                 'url': 'https://httpbin.org/json',
                 'name': 'HTTPBin Test',
-                'energy': 10,
+                'energy': 12,
                 'type': DataType.STRUCTURED_JSON
             },
             # Add more APIs as needed
@@ -247,13 +246,15 @@ class APIHarvester:
                 if response.status_code == 200:
                     content = response.text
                     
+                    # Use size-based neutral energy baseline
+                    base_energy = int(6 + min(24, len(content) // 500))
                     morsel = DataMorsel(
                         data_type=endpoint['type'],
                         content=content,
                         size=len(content),
                         source=f"API:{endpoint['name']}",
                         timestamp=time.time(),
-                        energy_value=endpoint['energy'],
+                        energy_value=base_energy,
                         difficulty=2
                     )
                     
@@ -525,7 +526,8 @@ class DataEcosystem:
         for i in range(n):
             txt = facts[i % len(facts)]
             dt = DataType.SIMPLE_TEXT if i % 3 != 0 else DataType.XML_DATA
-            energy = 5 if dt == DataType.SIMPLE_TEXT else 10
+            # Neutral baseline energy from size, not type
+            energy = int(6 + min(12, len(txt) // 50))
             out.append(DataMorsel(
                 data_type=dt,
                 content=txt,
