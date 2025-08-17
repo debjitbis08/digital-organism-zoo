@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Doom Feed</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; background: #0b0f14; color: #e6eef7; margin: 0; }
+  header { padding: 10px 12px; background: #111824; position: sticky; top: 0; z-index: 2; }
+  .tag { display:inline-block; padding:2px 6px; border-radius:4px; margin-right:8px; font-size:12px; }
+  .imp-3 { background:#3a0a0a; color:#ffb3b3; }
+  .imp-2 { background:#2a173d; color:#d1b3ff; }
+  .imp-1 { background:#0f2a1a; color:#b3ffd1; }
+  .log { padding: 6px 12px; border-bottom: 1px solid #152030; white-space: pre-wrap; }
+  .ts { color: #7a8ca3; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .meta { color:#94a3b8; font-size:12px; }
+</style>
+<header>
+  <strong>Digital Organism Zoo — Doom Feed</strong>
+  <span id="status" style="margin-left:10px; color:#94a3b8;">connecting…</span>
+  <span style="float:right"><a href="/eco/health" style="color:#94a3b8">/eco/health</a></span>
+  <div style="display:flex; gap:14px; align-items:center; margin-top:6px; color:#94a3b8;">
+    <label style="user-select:none; cursor:pointer;">
+      <input type="checkbox" id="chatterOnly" /> Chatter only (organisms)
+    </label>
+    <span style="font-size:12px;">Tip: set ZOO_DISABLE_EVOLUTION=1 to pause auto-start; otherwise the evolution loop runs.</span>
+  </div>
+  </header>
+<div id="feed"></div>
+<div id="chatter-board" style="display:none; padding:10px 12px;">
+  <div id="board-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:10px;"></div>
+  <div style="color:#94a3b8; font-size:12px; margin-top:8px;">Showing latest chatter per organism (no scrolling).</div>
+</div>
+<script>
+  const feed = document.getElementById('feed');
+  const board = document.getElementById('chatter-board');
+  const boardGrid = document.getElementById('board-grid');
+  const status = document.getElementById('status');
+  const chatterOnly = document.getElementById('chatterOnly');
+  const urlParams = new URLSearchParams(location.search);
+  if ((urlParams.get('mode')||'').toLowerCase() === 'chatter') {
+    chatterOnly.checked = true;
+  }
+  function applyMode() {
+    if (chatterOnly.checked) {
+      feed.style.display = 'none';
+      board.style.display = '';
+    } else {
+      board.style.display = 'none';
+      feed.style.display = '';
+    }
+  }
+  chatterOnly.addEventListener('change', applyMode);
+  applyMode();
+  // Chatter board state and rendering
+  const chatterByOrg = new Map(); // id -> {msgEl, tsEl, elem}
+  function upsertChatter(orgId, message, dateObj) {
+    let rec = chatterByOrg.get(orgId);
+    if (!rec) {
+      const card = document.createElement('div');
+      card.style.border = '1px solid #152030';
+      card.style.borderRadius = '6px';
+      card.style.padding = '10px';
+      card.style.background = '#0e1520';
+      const h = document.createElement('div');
+      h.innerHTML = `<span class="tag imp-1">org</span><strong>${orgId}</strong>`;
+      const m = document.createElement('div');
+      m.style.marginTop = '6px';
+      const t = document.createElement('div');
+      t.className = 'ts';
+      t.style.marginTop = '6px';
+      card.appendChild(h); card.appendChild(m); card.appendChild(t);
+      boardGrid.appendChild(card);
+      rec = { msgEl: m, tsEl: t, elem: card };
+      chatterByOrg.set(orgId, rec);
+    }
+    rec.msgEl.textContent = String(message||'').replace(/^\s*[^:]+:\s*/, '');
+    rec.tsEl.textContent = dateObj.toLocaleTimeString();
+  }
+  function add(evt) {
+    const d = new Date(evt.ts * 1000);
+    if (chatterOnly.checked) {
+      if (evt.tag !== 'chatter' || !evt.meta || !evt.meta.organism) return;
+      upsertChatter(evt.meta.organism, evt.message || '', d);
+    } else {
+      const row = document.createElement('div');
+      const imp = `imp-${evt.importance||1}`;
+      row.className = 'log';
+      row.innerHTML = `<span class="ts">${d.toLocaleTimeString()}</span>` +
+                      `<span class="tag ${imp}">${evt.tag||'msg'}</span>` +
+                      `${evt.message || ''}` +
+                      (evt.meta && Object.keys(evt.meta).length ? `<div class="meta">${JSON.stringify(evt.meta)}</div>` : '');
+      feed.appendChild(row);
+      if (feed.children.length > 1000) {
+        feed.removeChild(feed.firstChild);
+      }
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  }
+  // Start SSE from tail
+  let ev;
+  function connect() {
+    if (ev) ev.close();
+    ev = new EventSource('/events/stream');
+    ev.onopen = () => status.textContent = 'connected';
+    ev.onerror = () => { status.textContent = 'disconnected — retrying'; };
+    ev.onmessage = (m) => { try {
+      const evt = JSON.parse(m.data);
+      if (chatterOnly.checked && evt.tag !== 'chatter') return;
+      add(evt);
+    } catch(_){} };
+  }
+  connect();
+  // Reconnect occasionally to avoid stale proxies
+  setInterval(connect, 5 * 60 * 1000);
+  // Pull recent tail initially so page has content quickly
+  (function initTail(){
+    const url = chatterOnly.checked ? '/events?since=0&limit=500' : '/events?since=0&limit=200';
+    fetch(url).then(r=>r.text()).then(t=>{
+      t.trim().split('\n').forEach(line=>{ try {
+        const evt = JSON.parse(line);
+        if (chatterOnly.checked) {
+          if (evt.tag === 'chatter' && evt.meta && evt.meta.organism) add(evt);
+        } else {
+          add(evt);
+        }
+      } catch(_){} });
+    });
+  })();
+  // Keep activity visible: if no events after ~15s, show a heartbeat
+  let last = Date.now();
+  setInterval(()=>{
+    if (!chatterOnly.checked && Date.now() - last > 15000) {
+      add({ts: Date.now()/1000, tag:'heartbeat', importance:0, message:'…'});
+      last = Date.now();
+    }
+  }, 5000);
+  const orig = add; add = (e)=>{ last = Date.now(); orig(e); };
+</script>

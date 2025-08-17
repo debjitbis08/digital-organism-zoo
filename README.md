@@ -40,6 +40,22 @@ python genesis/evolution.py
 #   /health     -> health JSON (includes tick snapshot)
 #   /stats      -> combined DataEcosystem + runtime stats
 
+# Doom Feed (Task 11)
+#   Start the minimal web server to stream events:
+#   python web_interface/server.py
+#   Then open http://localhost:8000/doom to scroll the event stream.
+#
+#   Optionally, start a simple environment demo in the background:
+#   python web_interface/server.py --demo-simple
+#
+#   Or mount and run the internet-backed evolution runtime under /eco:
+#   python web_interface/server.py --demo-evolution
+#   Then visit http://localhost:8000/eco, /eco/health, /eco/stats
+#
+#   Programmatic endpoints:
+#     GET /events          -> NDJSON tail or long-poll with ?since=&wait=1
+#     GET /events/stream   -> Server-Sent Events (SSE)
+
 # To run the simple local grid instead (no internet):
 # RUN_MODE=simple python genesis/evolution.py
 ```
