@@ -105,9 +105,46 @@ Status: TODO
 File: genesis/self_modify.py
 Status: TODO
 
-### 🟡 Task 10: Environmental Pressures and Challenges
+### 🟡 Task 10: Environmental Pressures and Simple-Rule Substrate
 File: genesis/environment.py
-Status: TODO
+Status: TODO (design finalized; make this the default substrate)
+
+Goal
+- Let complexity emerge from simple local rules. Keep the Teacher, but limit its role to light environmental modulation and coarse feedback (no prescriptive topics/insights driving behavior). Primary drivers are energy, local resources, minimal memory, and costly signaling. This yields natural selection pressure (including for “larger brains” via memory size) without adding heavy systems.
+
+Minimal rule set (per tick, simple and local)
+- Environment: grid of resource patches with stock S that regrows via logistic rule with light noise; eating depletes S; bounds [0,K].
+- Organism state: Energy E, position x, integer memory size M≥0, exploration rate ε∈[0,1], honesty h∈[0,1], and a small FIFO memory of (location→last observed return) up to M.
+- Actions:
+  - Sense locally within radius R; hear nearby abundance signals.
+  - Move: explore with prob ε, else exploit best predicted return from memory/nearby cells.
+  - Eat: bite b, gain ΔE=min(b,S), reduce S accordingly.
+  - Update memory: store (cell→observed return), evict oldest when full.
+  - Signal (optional, costly): if ΔE>T, broadcast “abundance” with prob h; pay c_signal; receivers bias movement toward recent signals.
+  - Metabolism: pay c_base + c_mem·M per tick (memory is energetically costly).
+  - Reproduce/Die: if E≥E_rep, split with small mutations (M mutates ±1, clamp≥0); if E≤0, die.
+
+Heritability and pressure
+- M (memory size) is heritable and mutable; bigger M costs more but improves patch revisitation in stable worlds. Selection will favor/penalize M based on environmental stability without explicit “brain growth” logic.
+
+Integration plan (becomes the default; Task 6 proceeds on top)
+- Implement a minimal genesis/environment.py hosting the grid, patch dynamics, and per‑tick scheduling hooks.
+- Keep the Teacher but constrain it to:
+  - light environment modulation (e.g., r/K/noise per region as a function of external data summarized by the Teacher), and
+  - coarse evaluative feedback for optional micro-tasks (tiny energy bonuses),
+  without emitting topic insight tokens or direct behavioral advice. Organism “knowledge” is just local memory.
+- Keep region/migration from Task 5/6 as virtual regions mapping to grid neighborhoods; signals remain local.
+
+Expected logs (low‑noise)
+- “Organism X signaled abundance; N neighbors redirected.”
+- “Organism Y memory slots: 5 → 6 (mutation); metabolism cost up.”
+- “Patch (i,j) depleted; local crowd disperses.”
+
+Acceptance criteria
+- Organisms survive primarily by local patch foraging; the LLM Teacher is present but only modulates the environment and provides coarse feedback. No topic insight tokens are used to steer behavior.
+- Mixed strategies emerge (explorers vs exploiters), signaling affects movement, and boom‑bust cycles appear in logs.
+- Memory size M shows selection pressure: in stable settings M tends to increase; in volatile settings it decreases due to cost.
+- Existing tasks/tests continue to pass (adjust or add shims where necessary) and new unit tests cover the simple‑rules substrate.
 
 ---
 
