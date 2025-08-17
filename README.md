@@ -32,10 +32,13 @@ Digital organisms that:
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the ecosystem (auto-resumes from last save if available)
+# Run the ecosystem
+# Default: simple-rule environmental substrate (Task 10)
 python genesis/evolution.py
 
-# Watch organisms evolve and compete for real data!
+# Watch organisms survive via local patch foraging, signaling, and reproduction.
+# The previous real-data ecosystem remains available via the DataEcosystem
+# class (used in tests and utilities).
 ```
 
 ### Persistence backend

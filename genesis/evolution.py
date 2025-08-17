@@ -2158,6 +2158,69 @@ class Organism:
 # Example of organism ecosystem with real data harvesting
 if __name__ == "__main__":
     print("🌱 Starting Digital Organism Zoo with Real Data Ecosystem...")
+    # Task 10: Default to simple-rule environmental substrate run (no feature flag).
+    # This provides a minimal grid-world with local rules, signals, and reproduction.
+    try:
+        from genesis.environment import SimpleEnvironment
+        from genesis.stream import doom_feed
+        import random as _rand
+        import time as _time
+
+        rng = _rand.Random()
+        env = SimpleEnvironment(20, 12, K=12.0, r=0.22, noise_std=0.01, bite=2.5, sense_radius=1, rng=rng)
+
+        # Define regions aligned with virtual regions used elsewhere
+        env.set_regions({
+            'text-meadow': (0, 0, 6, 12),
+            'structured-rich': (6, 0, 13, 12),
+            'code-rich': (13, 0, 20, 12),
+        })
+        # Initial region parameter tweaks
+        env.set_region_params('structured-rich', K=16.0)
+        env.set_region_params('code-rich', r=0.28)
+
+        # Seed organisms
+        for i in range(12):
+            x = rng.randrange(env.grid.width)
+            y = rng.randrange(env.grid.height)
+            energy = rng.uniform(4.0, 8.0)
+            M = rng.choice([0, 1, 2, 3, 4])
+            eps = rng.uniform(0.05, 0.35)
+            h = rng.uniform(0.6, 0.95)
+            env.add_organism(x, y, energy=energy, M=M, epsilon=eps, honesty=h)
+
+        tick = 0
+        print("🔄 Running simple-rule environment (Ctrl+C to stop)...")
+        while True:
+            tick += 1
+            env.step()
+
+            # Occasional coarse teacher-like modulation of environment
+            if tick % 200 == 0:
+                env.apply_teacher_modulation({'code-rich': {'noise_std': 0.05 if (tick // 200) % 2 == 1 else 0.005}})
+
+            # Periodic summaries
+            if tick % 50 == 0:
+                alive = len(env.organisms)
+                avgE = sum(o.energy for o in env.organisms) / max(1, alive)
+                doom_feed.add('summary', f"Tick {tick}: {alive} alive, avgE={avgE:.2f}", 1)
+            if tick % 250 == 0:
+                try:
+                    import statistics
+                    left = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(0, 6)]
+                    mid = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(6, 13)]
+                    right = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(13, 20)]
+                    doom_feed.add('patch', f"Stocks L/M/R: {statistics.mean(left):.1f}/{statistics.mean(mid):.1f}/{statistics.mean(right):.1f}", 1)
+                except Exception:
+                    pass
+
+            _time.sleep(0.1)
+    except KeyboardInterrupt:
+        print("\n🛑 Stopped simple-rule environment.")
+        raise SystemExit(0)
+    except Exception:
+        # Fallback to previous real-data main loop below if the environment import fails
+        pass
     
     # Import data ecosystem
     import sys

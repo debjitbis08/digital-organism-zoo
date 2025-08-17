@@ -106,9 +106,9 @@ Status: TODO
 File: genesis/self_modify.py
 Status: TODO
 
-### 🟡 Task 10: Environmental Pressures and Simple-Rule Substrate
+### 🔵 Task 10: Environmental Pressures and Simple-Rule Substrate
 File: genesis/environment.py
-Status: TODO (design finalized; make this the default substrate)
+Status: COMPLETED (initial substrate; default runtime uses it; coarse feedback and adapter added; further demos/tests can expand selection-pressure analysis)
 
 Goal
 - Let complexity emerge from simple local rules. Keep the Teacher, but limit its role to light environmental modulation and coarse feedback (no prescriptive topics/insights driving behavior). Primary drivers are energy, local resources, minimal memory, and costly signaling. This yields natural selection pressure (including for “larger brains” via memory size) without adding heavy systems.
@@ -146,6 +146,29 @@ Acceptance criteria
 - Mixed strategies emerge (explorers vs exploiters), signaling affects movement, and boom‑bust cycles appear in logs.
 - Memory size M shows selection pressure: in stable settings M tends to increase; in volatile settings it decreases due to cost.
 - Existing tasks/tests continue to pass (adjust or add shims where necessary) and new unit tests cover the simple‑rules substrate.
+
+Current progress
+- Implemented genesis/environment.py with:
+  - PatchGrid: logistic regrowth with optional noise, bounded in [0, K]
+  - SimpleOrganism: energy, memory size M (FIFO), exploration rate (ε), honesty (h)
+  - SimpleEnvironment: per-tick movement (explore/exploit), eating, memory update, costly signaling, metabolism (base + M cost), reproduction with ±1 M mutation; doom_feed events for signaling and reproduction; deterministic under seeded RNG
+  - Added depletion observability: emits a compact "Patch (i,j) depleted; local crowd disperses." event when cells hit zero
+  - Reproduction logs include metabolism note when child M > parent M ("Metabolism cost up.")
+  - Region mapping and teacher modulation: define named rectangular regions and per-region overrides for K, r, noise_std; apply_teacher_modulation emits low-noise log; region-aware regrowth is default.
+  - Coarse evaluative feedback hook: apply_coarse_feedback allows tiny energy bonuses/penalties without prescriptive advice (low-noise doom_feed summary)
+  - Optional adapter SimpleEnvAdapter exposing get_ecosystem_stats() for light reuse where a DataEcosystem-like API is expected
+- Default runtime uses the simple-rule environment (no feature flag):
+  - genesis/evolution.py main now boots SimpleEnvironment, seeds organisms, steps the grid, and applies periodic coarse “teacher-like” modulation; emits compact summaries.
+  - The previous DataEcosystem remains available for tests/utilities, but is not the default runtime path.
+- Added tests (test_task10_environment.py):
+  - Validates logistic regrowth and bounds
+  - Ensures organisms eat, metabolize, and reproduce with ±1 M mutation
+  - Confirms signaling redirects neighbors (with low-noise summary)
+  - Verifies per-region modulation affects regrowth averages
+
+Remaining for Task 10
+- Optional: Wire real Teacher to environment modulation (coarse deltas for K/r/noise per region; no prescriptive advice), beyond the periodic modulation example in evolution.py.
+- Add selection-pressure tests/demos for memory size M (stable vs volatile regimes) and low-noise metrics logging (M distribution over time) to showcase emergent dynamics.
 
 ---
 
