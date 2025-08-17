@@ -1,32 +1,23 @@
+Note: This project was completely built by AI — initial version by Claude, then expanded by GPT-5.
+
 # Digital Organism Zoo 🧬
 
-A distributed artificial life ecosystem where digital organisms evolve from simple data consumers into sophisticated AI assistants through natural selection and learning.
+A distributed artificial life ecosystem where digital organisms evolve from simple data consumers into increasingly capable assistants through learning, competition, and limited parental guidance.
 
 ## What is it?
 
 Digital organisms that:
-- **Feed on real internet data** (RSS feeds, files, APIs)
-- **Evolve capabilities** through experience and frustration
-- **Ask for help** when stuck (limited parent LLM budget)
-- **Compete for resources** in a scarcity-driven ecosystem
-- **Eventually rewrite their own code** and migrate between hosts
 
-## Current Status: ~40% Complete ✅
+- Feed on real data (RSS feeds, files, APIs)
+- Learn via frustration and ask for help when stuck (constrained LLM “parent” budget)
+- Compete for scarce resources and eventually rewrite parts of their own code
 
-### Working Features
-- ✅ **Real data harvesting** from RSS feeds, file system, and APIs
-- ✅ **Capability evolution system** with 26 unlockable abilities
-- ✅ **Frustration-based learning** (organisms discover ASK_PARENT when struggling)
-- ✅ **Parent help economy** (10 LLM calls/day budget with response caching)
-- ✅ **Energy-based survival** with food scarcity mechanics
-- ✅ **Emotional states** (content → struggling → frustrated → desperate)
+## Status
 
-### In Development
-- 🔄 **Ollama LLM integration** for real parent responses
-- 🔄 **Organism persistence** (save/load between sessions; optional SQLite backend)
-- 🔄 **Multi-organism interactions** and resource competition
+- Working: data harvesting, capability evolution (26 abilities), frustration-based learning, parent-help economy, energy/health loop, emotional state machine
+- In progress: Ollama LLM integration, persistence improvements, multi-organism interactions
 
-## Quick Start
+## Quick start
 
 ```bash
 # Install dependencies
@@ -35,118 +26,44 @@ pip install -r requirements.txt
 # Run the ecosystem (internet-backed by default)
 python genesis/evolution.py
 
-# Endpoints:
-#   /           -> small status
-#   /health     -> health JSON (includes tick snapshot)
-#   /stats      -> combined DataEcosystem + runtime stats
+# Endpoints
+#   /        -> small status
+#   /health  -> health JSON (tick snapshot)
+#   /stats   -> combined DataEcosystem + runtime stats
 
-# Doom Feed (Task 11)
-#   Start the minimal web server to stream events:
-#   python web_interface/server.py
-#   Then open http://localhost:8000/doom to scroll the event stream.
-#
-#   Optionally, start a simple environment demo in the background:
-#   python web_interface/server.py --demo-simple
-#
-#   Or mount and run the internet-backed evolution runtime under /eco:
-#   python web_interface/server.py --demo-evolution
-#   Then visit http://localhost:8000/eco, /eco/health, /eco/stats
-#
-#   Programmatic endpoints:
-#     GET /events          -> NDJSON tail or long-poll with ?since=&wait=1
-#     GET /events/stream   -> Server-Sent Events (SSE)
+# Optional: simple local grid (no internet)
+RUN_MODE=simple python genesis/evolution.py
 
-# To run the simple local grid instead (no internet):
-# RUN_MODE=simple python genesis/evolution.py
+# Optional: minimal web UI / event stream
+python web_interface/server.py --demo-evolution
+# Visit: http://localhost:8000/doom
 ```
 
-### Persistence backend
+## Persistence
 
-By default, organism state is saved as JSON files under organism_saves/.
-For larger runs, you can switch to a local SQLite database for fewer files
-and faster lookups:
+By default, organism state is stored as JSON under organism_saves/.
+For larger runs you can switch to SQLite:
 
 ```bash
 export PERSISTENCE_BACKEND=sqlite
 python genesis/evolution.py
 ```
 
-Or programmatically:
+The database will be created at organism_saves/organisms.db.
 
-```python
-from genesis.persistence import create_persistence_system
-persistence = create_persistence_system(backend="sqlite")
-```
-
-The SQLite database is created at organism_saves/organisms.db.
-
-## Architecture
+## Repository map
 
 ```
-digital-organism-zoo/
-├── genesis/
-│   ├── evolution.py      # Core organism + capability system
-│   ├── body_parts.py     # Evolvable, data-driven limbs (sensors/manipulators)
-│   ├── teacher.py        # LLM parent integration
-│   └── ecosystem.py      # World rules and interactions
-├── data_sources/
-│   └── harvesters.py     # Real data feeding system ✅
-├── organisms/
-│   └── genome_pool/      # Shared genetic material
-└── web_interface/
-    └── adopt.html        # User adoption interface
+genesis/            Core evolution engine, body parts, teacher, ecosystem
+data_sources/       Real data harvesting
+organisms/          Genome pool and examples
+web_interface/      Minimal event stream / demo server
 ```
-
-## Evolution Tree
-
-```
-Start: SENSE_DATA, EAT_TEXT
-  ↓
-Basic: PATTERN_MATCH, REMEMBER, SIGNAL
-  ↓ (frustration-based discovery)
-Social: ASK_PARENT, SHARE, TRADE
-  ↓
-Advanced: PREDICT, CREATE, ABSTRACT
-  ↓
-Ultimate: READ_SELF, MODIFY_LOGIC, WRITE_CODE
-
-Body parts (limbs)
-- Defined in a data-driven registry (optional JSON: body_parts_registry.json)
-- Genotype BodyPartGenome picks parts and levels; phenotype Body applies effects
-- Effects are soft biases:
-  - Foraging preferences (freshness/difficulty/novelty/type bias)
-  - Digestion metric nudges (C, R, N, K, S) and small cost reductions
-  - Example parts: probe_antenna, manipulator_claw, stabilizer_fins, compressor_gland
-
-You can override or extend parts by creating a body_parts_registry.json at repo root.
-```
-
-## Example Organism Lifecycle
-
-1. **Born** with basic survival capabilities
-2. **Struggles** to process complex data, builds frustration
-3. **Discovers** ASK_PARENT capability through desperation
-4. **Gets help** from LLM parent (limited budget)
-5. **Evolves** new capabilities through experience
-6. **Eventually** rewrites its own code and teaches others
-
-## Vision
-
-True digital life where organisms:
-- Survive without constant human intervention
-- Develop genuine curiosity and social needs
-- Pass successful traits to offspring
-- Migrate between host machines in P2P network
-- Evolve from pattern-matchers to code-writing entities
 
 ## Contributing
 
-See `TODOS.md` for detailed development roadmap and current TODO list.
+See TODOS.md for the roadmap and current tasks.
 
-## The Magic ✨
+—
 
-These aren't optimizing algorithms - they're digital beings that struggle, learn, compete, and genuinely try to survive. They ask for help when confused, just like children. Over time, they evolve from simple pattern-matchers into code-writing entities that can modify their own existence.
-
----
-
-*Status: Foundation complete, core implementations needed for full self-sustaining ecosystem*
+Goal: approachable, self-sustaining digital life that learns, cooperates, and gradually becomes capable of modifying its own existence.
