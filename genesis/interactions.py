@@ -127,6 +127,36 @@ def run_region_interactions(organisms: List, ecosystem_stats: Dict[str, Any]) ->
                         t.energy = max(5, getattr(t, 'energy', 0) - int(max(1.0, t_cost)))
                     except Exception:
                         pass
+                    # Task 7: minimal knowledge diffusion and social observation
+                    try:
+                        if hasattr(t, 'good_food_memories') and t.good_food_memories:
+                            best_m = max(t.good_food_memories[-5:], key=lambda m: m.get('energy_gained', 0.0))
+                            # Copy a faded version into student's memory
+                            student.good_food_memories = getattr(student, 'good_food_memories', [])
+                            copied = {
+                                'food_type': best_m.get('food_type'),
+                                'energy_gained': 0.6 * float(best_m.get('energy_gained', 0.0)),
+                                'source': best_m.get('source', 'shared'),
+                                'age_found': getattr(student, 'age', 0),
+                                'copied_from': getattr(t, 'id', 'peer'),
+                            }
+                            student.good_food_memories.append(copied)
+                            if len(student.good_food_memories) > 10:
+                                student.good_food_memories = student.good_food_memories[-10:]
+                            # Record an observation to seed imitation
+                            if hasattr(student, '_observe_neighbor'):
+                                student._observe_neighbor(getattr(t, 'id', ''), 'forage',
+                                                          {'food_type': best_m.get('food_type')},
+                                                          {'energy': best_m.get('energy_gained', 0.0), 'success': True})
+                            try:
+                                from genesis.stream import doom_feed
+                                doom_feed.add('diffuse', f"{t.id} shared a lead with {student.id}", 1, {'organism': t.id})
+                            except Exception:
+                                pass
+                            # Small learning/teaching costs
+                            student.energy = max(1, getattr(student, 'energy', 0) - 1)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 summary['teaching_events'] += 1

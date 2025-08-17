@@ -94,9 +94,40 @@ Notes/Future tweaks:
 - Further tune energy/social economics and effect sizes as more behaviors/actuators are added.
 - Expand competition observability with richer periodic summaries if needed by UI.
 
-### 🟡 Task 7: Social Learning Between Organisms
-File: genesis/ecosystem.py
-Status: TODO
+### 🔵 Task 7: Social Learning Between Organisms
+File: genesis/ecosystem.py (concept), implemented across: genesis/evolution.py, genesis/interactions.py, genesis/persistence.py
+Status: PARTIAL (initial scaffolding; low-noise; backwards compatible)
+
+What’s implemented (now):
+- 7.1 Social memory scaffolding
+  - Organisms maintain bounded social_observations with (neighbor, behavior, outcome, ts); tiny _trust_map per neighbor.
+  - Brain gets optional sensors: social_success_recent and social_failure_recent.
+- 7.2 Imitation mechanics (lite)
+  - Short-horizon imitation bias (_social_bias) toward recently observed successful food types; decays each tick.
+  - Bias integrates into _choose_preferred_types; avoids lock-in via TTL/strength decay.
+- 7.3 Knowledge/lead diffusion
+  - During teaching, teacher shares a faded best foraging memory with a student (bounded, provenance kept).
+  - Student records observation and receives a short-lived imitation seed. Small energy costs applied.
+- 7.4 Trust and reputation heuristics
+  - Trust updated from observed outcome utility (success/energy). Used to scale imitation strength.
+- 7.5 Energetics and costs
+  - Small energy cost for teaching and learning to maintain survival economics (balanced and bounded).
+- 7.6 Persistence
+  - File and SQLite backends persist compact slices of social_observations (last 20) and trust_map (top 10); optional fields restored on load.
+- 7.7 Observability
+  - Doom feed emits imitate and diffuse events at low noise.
+
+Remaining (future work):
+- 7.2 Honor actuator/availability constraints in imitation more explicitly; increase pressure to evolve actuator when missing.
+- 7.3 Extend diffusion to topic insights with decay/anti-duplication beyond foraging leads.
+- 7.4 Incorporate honesty/lead accuracy signals into trust; add region summary metrics (imitation rate, diffusion volume).
+- 7.7 Add periodic per-region summaries for social learning.
+- 7.8 Deterministic test hooks (ZOO_TEST_SOCIAL_LEARNING) and helpers to inject synthetic observations.
+- 7.9 Add unit/integration tests: imitation bias + decay; trust update; diffusion improves foraging; persistence round-trip.
+
+Notes
+- Effects are intentionally small and local; integrated with Task 6 scheduling.
+- Logs remain low-noise and compact for UI readability.
 
 ### 🟡 Task 8: Genetic Recombination During Reproduction
 File: genesis/evolution.py

@@ -71,6 +71,27 @@ class OrganismPersistence:
             'memory': organism.memory[-50:] if getattr(organism, 'memory', None) else [],
             'code_modifications': []
         }
+        # Task 7: persist small slice of social learning state (bounded)
+        try:
+            obs = []
+            if getattr(organism, 'social_observations', None):
+                for ob in organism.social_observations[-20:]:
+                    # Keep compact fields only
+                    obs.append({
+                        'n': ob.get('neighbor'),
+                        'b': ob.get('behavior'),
+                        'e': (ob.get('outcome') or {}).get('energy'),
+                        't': ob.get('ts'),
+                    })
+            organism_data['social_observations'] = obs
+            tm = {}
+            if getattr(organism, '_trust_map', None):
+                # Keep up to 10 entries with highest trust
+                items = sorted(organism._trust_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
+                tm = {k: float(v) for k, v in items}
+            organism_data['trust_map'] = tm
+        except Exception:
+            pass
 
         if hasattr(organism, 'brain_genome') and organism.brain_genome is not None:
             try:
@@ -158,6 +179,21 @@ class OrganismPersistence:
             organism.unique_food_sources = set(
                 organism_data.get('unique_food_sources', [])
             )
+            # Restore social fields if present
+            try:
+                raw_obs = organism_data.get('social_observations', [])
+                organism.social_observations = []
+                for ob in raw_obs:
+                    organism.social_observations.append({
+                        'neighbor': ob.get('n'),
+                        'behavior': ob.get('b'),
+                        'context': {},
+                        'outcome': {'energy': ob.get('e')},
+                        'ts': ob.get('t'),
+                    })
+                organism._trust_map = dict(organism_data.get('trust_map', {}))
+            except Exception:
+                pass
 
             if 'brain_genome' in organism_data:
                 try:
@@ -438,6 +474,20 @@ class DBPersistence:
             'memory': organism.memory[-50:] if getattr(organism, 'memory', None) else [],
             'code_modifications': []
         }
+        # Task 7: persist a tiny slice of social state
+        try:
+            obs = []
+            if getattr(organism, 'social_observations', None):
+                for ob in organism.social_observations[-20:]:
+                    obs.append({'n': ob.get('neighbor'), 'b': ob.get('behavior'), 'e': (ob.get('outcome') or {}).get('energy'), 't': ob.get('ts')})
+            organism_data['social_observations'] = obs
+            tm = {}
+            if getattr(organism, '_trust_map', None):
+                items = sorted(organism._trust_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
+                tm = {k: float(v) for k, v in items}
+            organism_data['trust_map'] = tm
+        except Exception:
+            pass
         # Include brain genome if available
         if hasattr(organism, 'brain_genome') and organism.brain_genome is not None:
             try:
@@ -499,6 +549,21 @@ class DBPersistence:
             organism.unique_food_sources = set(
                 organism_data.get('unique_food_sources', [])
             )
+            # Restore social fields
+            try:
+                raw_obs = organism_data.get('social_observations', [])
+                organism.social_observations = []
+                for ob in raw_obs:
+                    organism.social_observations.append({
+                        'neighbor': ob.get('n'),
+                        'behavior': ob.get('b'),
+                        'context': {},
+                        'outcome': {'energy': ob.get('e')},
+                        'ts': ob.get('t'),
+                    })
+                organism._trust_map = dict(organism_data.get('trust_map', {}))
+            except Exception:
+                pass
             # Restore brain
             if 'brain_genome' in organism_data:
                 try:

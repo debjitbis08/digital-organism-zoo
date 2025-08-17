@@ -499,6 +499,10 @@ class Organism:
         # Interface adaptation dynamics
         self.interface_adaptation_rate = 0.25
         self._adaptation_history = []  # recent outcomes for tuning
+        # Task 7: Social learning scaffolding
+        self.social_observations = []  # recent observations of neighbors
+        self._trust_map = {}
+        self._social_bias = None  # short-horizon imitation (types, strength, ttl)
         
         # Inherit from parent
         if parent_genome:
@@ -840,6 +844,22 @@ class Organism:
             'capability_density': cap_norm,
             'recent_success': max(0.0, min(1.0, recent_success)),
         }
+        # Task 7: Social sensors summarizing recent observations
+        try:
+            wins = 0
+            fails = 0
+            if getattr(self, 'social_observations', None):
+                for ob in self.social_observations[-10:]:
+                    out = (ob.get('outcome') or {}) if isinstance(ob, dict) else {}
+                    if out.get('success') is True or float(out.get('energy', 0.0)) > 4.0:
+                        wins += 1
+                    elif out.get('success') is False or float(out.get('energy', 0.0)) <= 0.5:
+                        fails += 1
+            total = max(1, wins + fails)
+            sensor_map['social_success_recent'] = max(0.0, min(1.0, wins / total))
+            sensor_map['social_failure_recent'] = max(0.0, min(1.0, fails / total))
+        except Exception:
+            pass
         # Extended sensors available for Task 5
         # Global scarcity (alias)
         sensor_map['scarcity_global'] = scarcity
@@ -1188,6 +1208,66 @@ class Organism:
         
         print(f"🍽️  Organism {self.id} ate {food_morsel.data_type.value} from {food_morsel.source} (+{energy_gained} energy){learning_msg}{recent_insights}")
 
+    # -------------------- Task 7: Social learning helpers --------------------
+    def _observe_neighbor(self, neighbor_id: str, behavior: str, context: Dict[str, Any], outcome: Dict[str, Any]):
+        """Record a compact observation and update trust + imitation.
+
+        Keeps bounded history and seeds a short-horizon imitation bias when
+        a strong, actionable outcome is seen locally.
+        """
+        try:
+            ob = {
+                'neighbor': neighbor_id,
+                'behavior': behavior,
+                'context': context or {},
+                'outcome': outcome or {},
+                'ts': int(time.time()),
+            }
+            self.social_observations.append(ob)
+            if len(self.social_observations) > 30:
+                self.social_observations = self.social_observations[-30:]
+            # Trust update
+            energy = float((outcome or {}).get('energy', 0.0))
+            success = (outcome or {}).get('success')
+            delta = 0.0
+            if success is True or energy > 6.0:
+                delta = 0.08
+            elif success is False or energy <= 0.1:
+                delta = -0.05
+            cur = self._trust_map.get(neighbor_id, 0.5)
+            self._trust_map[neighbor_id] = max(0.0, min(1.0, cur + delta))
+            # Seed imitation bias based on observed food type
+            try:
+                from data_sources.harvesters import DataType
+                t = None
+                ct = (context or {}).get('food_type') or (context or {}).get('type')
+                if isinstance(ct, DataType):
+                    t = ct
+                if t is not None and (success is True or energy > 6.0):
+                    strength = 0.35 + 0.25 * self._trust_map.get(neighbor_id, 0.5)
+                    self._social_bias = {'types': [t], 'strength': strength, 'ttl': 3}
+                    try:
+                        from genesis.stream import doom_feed
+                        doom_feed.add('imitate', f"{self.id} observed {neighbor_id} succeed with {t.value}", 1,
+                                      {'organism': self.id})
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _decay_social_bias(self):
+        if not self._social_bias:
+            return
+        try:
+            self._social_bias['ttl'] = int(self._social_bias.get('ttl', 1)) - 1
+            self._social_bias['strength'] = max(0.0, float(self._social_bias.get('strength', 0.0)) * 0.7)
+            if self._social_bias['ttl'] <= 0 or self._social_bias['strength'] < 0.05:
+                self._social_bias = None
+        except Exception:
+            self._social_bias = None
+
     def _choose_preferred_types(self, n=2, data_ecosystem=None, nutrition_system=None):
         """Choose preferred DataTypes based on brain drives, successes, ecosystem, and metabolic state."""
         try:
@@ -1266,6 +1346,15 @@ class Organism:
                 for dt in [DataType.SIMPLE_TEXT, DataType.STRUCTURED_JSON, DataType.XML_DATA, DataType.CODE]:
                     if dt not in recent_types:
                         weights[dt] = weights.get(dt, 0.0) + 0.1
+        # Task 7: Social imitation bias — tilt toward observed successful types
+        try:
+            bias = getattr(self, '_social_bias', None)
+            if bias and bias.get('types'):
+                strength = float(bias.get('strength', 0.0))
+                for dt in bias['types']:
+                    weights[dt] = weights.get(dt, 0.0) + max(0.0, min(0.5, strength))
+        except Exception:
+            pass
         # Scarcity manager type-specific scarcity (if available)
         if nutrition_system and 'scarcity_manager' in nutrition_system:
             sm = nutrition_system['scarcity_manager']
@@ -1763,6 +1852,8 @@ class Organism:
         # Try to evolve
         if random.random() < 0.01:
             self.attempt_evolution()
+        # Decay any short-lived imitation pressure
+        self._decay_social_bias()
     
     def can_process(self, environment):
         """Check if organism has capabilities for this situation"""
