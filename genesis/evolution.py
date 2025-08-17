@@ -418,7 +418,19 @@ class _TradeBoard:
         except Exception:
             pass
 
-    def get_recent_leads(self, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_leads(self, limit: int = 5, region: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return recent leads, optionally filtered by region.
+
+        - If region is provided, returns the most recent leads from that region.
+        - Falls back to global recent leads when no region match is found.
+        """
+        if not self.leads:
+            return []
+        if region:
+            # Filter and return last N from the region
+            local = [L for L in self.leads if L.get('region') == region]
+            if local:
+                return local[-limit:]
         return list(self.leads[-limit:])
 
 
@@ -846,10 +858,12 @@ class Organism:
             sensor_map['scarcity_structured'] = max(0.0, min(1.0, 1.0 - availability_structured))
             sensor_map['scarcity_code'] = max(0.0, min(1.0, 1.0 - availability_code))
             # Competition/pressure: blend scarcity with regional population size if available
-            comp = scarcity
+            comp_scarcity = scarcity
+            comp_pop = 0.0
             if hasattr(self, '_region_population'):
                 # Map 1..6+ population to ~0..1
-                comp = max(comp, max(0.0, min(1.0, (float(self._region_population) - 1.0) / 5.0)))
+                comp_pop = max(0.0, min(1.0, (float(self._region_population) - 1.0) / 5.0))
+            comp = 0.5 * comp_scarcity + 0.5 * comp_pop
             sensor_map['competition_local'] = max(0.0, min(1.0, comp))
         # Metabolic/health
         if nutrition_system and 'metabolic_tracker' in nutrition_system:
@@ -986,12 +1000,10 @@ class Organism:
                 pass
             # Use trade board lead to bias first attempt if available
             if drives.get('trade', 0.0) > 0.6:
-                leads = trade_board.get_recent_leads()
+                my_region = getattr(self, 'current_region', None)
+                leads = trade_board.get_recent_leads(region=my_region)
                 if leads:
-                    # Prefer region-local leads if available
-                    my_region = getattr(self, 'current_region', None)
-                    local = [L for L in leads if my_region and L.get('region') == my_region]
-                    last = (local[-1] if local else leads[-1])
+                    last = leads[-1]
                     lt = last.get('type')
                     try:
                         if lt is not None:
@@ -2544,8 +2556,11 @@ def run_indefinite_zoo(config: dict = None):
                     # Surface a compact summary occasionally
                     if inter_summary and (inter_summary.get('teaching_events', 0) > 0 or inter_summary.get('trade_leads', 0) > 0):
                         from genesis.stream import doom_feed
-                        regions = ','.join(f"{r}:{d['population']}" for r, d in inter_summary.get('regions', {}).items())
-                        doom_feed.add('interactions', f"teaching={inter_summary.get('teaching_events',0)}, trade={inter_summary.get('trade_leads',0)} [{regions}]", 1)
+                        regions = ','.join(
+                            f"{r}:pop={d.get('population',0)},comp={d.get('competition',0):.2f}"
+                            for r, d in inter_summary.get('regions', {}).items()
+                        )
+                        doom_feed.add('interactions', f"teach={inter_summary.get('teaching_events',0)}, trade={inter_summary.get('trade_leads',0)} [{regions}]", 1)
             except Exception:
                 pass
             
