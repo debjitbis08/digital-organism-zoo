@@ -14,6 +14,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from genesis.stream import doom_feed
+from genesis.persistence import create_persistence_system, auto_save_organisms
 
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -47,6 +48,7 @@ def start_evolution_runtime() -> None:
             from genesis.evolution import Organism as _Organism, Capability as _Cap
             from werkzeug.middleware.dispatcher import DispatcherMiddleware as _Dispatcher
             import threading as _threading
+            import signal as _signal
 
             doom_feed.add('system', 'starting evolution runtime (mounted at /eco)', 1)
 
@@ -59,7 +61,22 @@ def start_evolution_runtime() -> None:
             })
 
             runtime = _RuntimeManager()
-            organisms = [_Organism(generation=0) for _ in range(3)]
+            # Persistence system and state restoration
+            persistence_system = create_persistence_system()
+            latest = persistence_system.get_latest_generation_save()
+            if latest:
+                try:
+                    organisms = persistence_system.load_generation(latest['file_path'])
+                except Exception:
+                    organisms = []
+                if not organisms:
+                    organisms = [_Organism(generation=0) for _ in range(3)]
+                current_generation = int(latest.get('generation', 0))
+                doom_feed.add('persistence', f"resumed {len(organisms)} organisms from gen {current_generation}", 1)
+            else:
+                organisms = [_Organism(generation=0) for _ in range(3)]
+                current_generation = 0
+                doom_feed.add('persistence', f"fresh start with {len(organisms)} organisms", 1)
             for o in organisms:
                 try:
                     o.capabilities.add(_Cap.REMEMBER)
@@ -69,6 +86,7 @@ def start_evolution_runtime() -> None:
             parent_care = _ParentCare()
 
             _stop_flag = _threading.Event()
+            _save_lock = _threading.Lock()
 
             def _brain_params(brain) -> int:
                 try:
@@ -77,11 +95,25 @@ def start_evolution_runtime() -> None:
                 except Exception:
                     return 0
 
+            def _save_state(tag: str = 'periodic') -> None:
+                # Save organisms and keep latest pointer updated; safe across threads
+                try:
+                    with _save_lock:
+                        auto_save_organisms(organisms, persistence_system, current_generation)
+                        doom_feed.add('persistence', f"state saved ({tag})", 1)
+                except Exception as _e:
+                    try:
+                        doom_feed.add('error', f"save failed: {_e}", 3)
+                    except Exception:
+                        pass
+
             def _loop():
                 import time as _time
+                ticks_since_save = 0
                 while not _stop_flag.is_set():
                     try:
                         runtime.ticks += 1
+                        ticks_since_save += 1
                         for o in list(organisms):
                             o.live(eco, nutrition_system, parent_care)
                             if o.energy <= 0:
@@ -98,6 +130,10 @@ def start_evolution_runtime() -> None:
                             if b is not None:
                                 sizes.append(_brain_params(b))
                         runtime.avg_brain_size = (sum(sizes) / len(sizes)) if sizes else 0.0
+                        # Periodic autosave (roughly every ~25s at 0.5s per tick)
+                        if ticks_since_save >= 50:
+                            _save_state('autosave')
+                            ticks_since_save = 0
                         # Pull some chatter from doom_feed
                         try:
                             events = doom_feed.get_recent(200)
@@ -130,6 +166,28 @@ def start_evolution_runtime() -> None:
             eco_app = _create_eco_app(eco, runtime)
             # Mount ecosystem app at /eco
             app.wsgi_app = _Dispatcher(app.wsgi_app, {'/eco': eco_app})
+
+            # Register graceful shutdown to persist state on SIGINT/SIGTERM
+            def _shutdown_handler(*_args):
+                try:
+                    _stop_flag.set()
+                    _save_state('shutdown')
+                finally:
+                    os._exit(0)
+
+            try:
+                _signal.signal(_signal.SIGTERM, _shutdown_handler)
+                _signal.signal(_signal.SIGINT, _shutdown_handler)
+            except Exception:
+                # Some environments may disallow setting signal handlers
+                pass
+
+            # Also attempt to save at interpreter exit
+            try:
+                import atexit as _atexit
+                _atexit.register(lambda: _save_state('atexit'))
+            except Exception:
+                pass
             _evolution_started = True
         except Exception as e:
             try:

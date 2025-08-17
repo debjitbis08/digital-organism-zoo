@@ -512,6 +512,18 @@ class Organism:
         self._social_bias = None  # short-horizon imitation (types, strength, ttl)
         # Task 9: self-modification manager (lazy)
         self._self_modify_manager = None
+
+        # Emergent lexicon per lineage for lightweight proto-language tokens
+        try:
+            # Lazy import to avoid heavy deps
+            from genesis.lexicon import Lexicon  # type: ignore
+            # Seed per-organism for reproducibility
+            seed = int(self.id[:6], 16) if isinstance(self.id, str) else random.randint(0, 1_000_000)
+            self.lexicon = Lexicon(random.Random(seed))
+        except Exception:
+            self.lexicon = None
+        # Track last digestion quality proxy for lexicon reinforcement
+        self.last_Q = 0.0
         
         # Inherit from parent
         if parent_genome:
@@ -847,25 +859,25 @@ class Organism:
             except Exception:
                 insights = 0
         complexity = 1 + min(3, insights // 5) + min(2, self.age // 200)
-        # Extract learned tokens from knowledge to enrich talk dynamically
+        # Extract learned tokens from knowledge to enrich talk dynamically (optional flavor)
         learned_tokens = self._learned_tokens(max_tokens=8)
-        act_words = {
-            'explore': ['seek', 'scout', 'range', 'venture'],
-            'conserve': ['save', 'reserve', 'steady'],
-            'risk': ['dare', 'press', 'gamble'],
-            'teach': ['teach', 'explain', 'guide'],
-            'trade': ['offer', 'barter', 'swap'],
-            'social': ['greet', 'signal', 'hail'],
-            'migrate': ['migrate', 'drift', 'roam'],
-            'prefer_structured': ['favor structure', 'prefer order'],
-        }
-        # Map top acts to verbs (base set)
+        # Use emergent lexicon words as core tokens for acts
         base_words = []
+        concept_ids = []
         for a, v in top_acts:
-            bank = act_words.get(a, [a])
-            idx = 0 if v < 0.33 else (1 if v < 0.66 else -1)
-            w = bank[min(len(bank)-1, idx)]
-            base_words.append(w)
+            try:
+                if getattr(self, 'lexicon', None):
+                    bucket = 'low' if v < 0.33 else ('mid' if v < 0.66 else 'high')
+                    cid = f"{a}:{bucket}"
+                    w = self.lexicon.get_or_mint(cid)
+                    base_words.append(w)
+                    concept_ids.append(cid)
+                else:
+                    base_words.append(a)
+                    concept_ids.append(a)
+            except Exception:
+                base_words.append(a)
+                concept_ids.append(a)
         # Build utterance proportional to complexity, reusing and varying words when needed
         mod_adverbs = ['softly', 'boldly', 'together', 'today', 'again', 'now']
         phrases = []
@@ -896,6 +908,14 @@ class Organism:
             # Add a modal
             tail = ['consider', 'persist', 'return', 'pause'][(self.age // 30) % 4]
             phrases.append(tail)
+        # Reinforce lexicon words based on last digestion quality proxy
+        try:
+            if getattr(self, 'lexicon', None) and concept_ids:
+                success = bool(getattr(self, 'last_Q', 0.0) > 0.0)
+                for cid in concept_ids:
+                    self.lexicon.reinforce(cid, success=success)
+        except Exception:
+            pass
         return ' '.join(phrases)
 
     def _learned_tokens(self, max_tokens: int = 8):
@@ -1258,6 +1278,10 @@ class Organism:
         if not nutrition_system:
             # Simple processing
             self.energy += food_morsel.energy_value
+            try:
+                self.last_Q = 1.0 if food_morsel.energy_value > 0 else -1.0
+            except Exception:
+                self.last_Q = 0.0
             # Reinforcement for simple path
             try:
                 if hasattr(self, '_lead_context') and self._lead_context:
@@ -1297,6 +1321,10 @@ class Organism:
             energy_gained = food_morsel.energy_value
         
         self.energy += energy_gained
+        try:
+            self.last_Q = 1.0 if energy_gained > 0 else -1.0
+        except Exception:
+            self.last_Q = 0.0
 
         # Run the brain on data-ingestion sensors to expose digestion output
         try:
