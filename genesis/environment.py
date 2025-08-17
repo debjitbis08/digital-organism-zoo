@@ -25,6 +25,7 @@ import math
 import random
 
 from .stream import doom_feed
+from .data_source import DataChunk, DataSource, OfflineSampleDataSource
 
 
 Coord = Tuple[int, int]
@@ -43,12 +44,18 @@ class PatchGrid:
     r: float = 0.2
     noise_std: float = 0.0
     rng: random.Random = field(default_factory=random.Random)
+    # Optional data source: when set, stock increments are mapped to data chunks
+    data_source: Optional[DataSource] = None
 
     def __post_init__(self):
         # Start half-full by default
         self.S: List[List[float]] = [
             [self.K * 0.5 for _ in range(self.width)] for _ in range(self.height)
         ]
+        # Per-cell data buffers if a data source is attached
+        self._buffers: Optional[List[List[List[DataChunk]]]] = None
+        if self.data_source is not None:
+            self._buffers = [[[] for _ in range(self.width)] for _ in range(self.height)]
 
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
@@ -85,7 +92,41 @@ class PatchGrid:
                     S_next = 0.0
                 if S_next > self.K:
                     S_next = self.K
+                # Interpret positive delta as new data arrival if buffers active
+                if self._buffers is not None and S_next > S:
+                    self._refill_data(x, y, S_next - S)
                 row[x] = S_next
+
+    # -------------------- Optional data buffers --------------------
+    def _refill_data(self, x: int, y: int, delta_units: float) -> None:
+        if self._buffers is None or self.data_source is None:
+            return
+        n = int(max(0, math.floor(delta_units)))
+        if n <= 0:
+            return
+        chunks = self.data_source.provide(n=n, rng=self.rng)
+        self._buffers[y][x].extend(chunks)
+
+    def consume_data(self, x: int, y: int, n: int) -> List[DataChunk]:
+        if self._buffers is None or n <= 0:
+            return []
+        buf = self._buffers[y][x]
+        if not buf:
+            return []
+        k = min(n, len(buf))
+        taken = buf[-k:]
+        del buf[-k:]
+        return taken
+
+    def buffer_type_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        if self._buffers is None:
+            return counts
+        for y in range(self.height):
+            for x in range(self.width):
+                for ch in self._buffers[y][x]:
+                    counts[ch.kind] = counts.get(ch.kind, 0) + 1
+        return counts
 
 
 @dataclass
@@ -103,6 +144,8 @@ class SimpleOrganism:
     # Internal memory of cell->last observed return (FIFO capped by M)
     memory: Dict[Coord, float] = field(default_factory=dict)
     memory_order: List[Coord] = field(default_factory=list)
+    # Optional: count ingested data items by type when data source is active
+    ingested_counts: Dict[str, int] = field(default_factory=dict)
 
     def remember(self, coord: Coord, value: float) -> None:
         if coord in self.memory:
@@ -146,9 +189,18 @@ class SimpleEnvironment:
         signal_threshold: float = 1.0,
         reproduce_threshold: float = 20.0,
         rng: Optional[random.Random] = None,
+        data_source: Optional[DataSource] = None,
     ):
         self.rng = rng or random.Random()
-        self.grid = PatchGrid(width, height, K=K, r=r, noise_std=noise_std, rng=self.rng)
+        self.grid = PatchGrid(
+            width,
+            height,
+            K=K,
+            r=r,
+            noise_std=noise_std,
+            rng=self.rng,
+            data_source=data_source,
+        )
         self.bite = bite
         self.R = sense_radius
         self.base_cost = base_cost
@@ -273,6 +325,13 @@ class SimpleEnvironment:
             if bite_gain > 0:
                 new_stock = stock - bite_gain
                 self.grid.set(org.x, org.y, new_stock)
+                # If the grid tracks internet data, ingest corresponding items
+                n_items = int(max(0, math.floor(bite_gain)))
+                if n_items > 0:
+                    items = self.grid.consume_data(org.x, org.y, n_items)
+                    if items:
+                        for it in items:
+                            org.ingested_counts[it.kind] = org.ingested_counts.get(it.kind, 0) + 1
                 if stock > 0 and new_stock <= 0:
                     # Track depleted patch for low-noise logging
                     depleted.append((org.x, org.y))
@@ -423,6 +482,13 @@ class SimpleEnvironment:
                     s_next = 0.0
                 if s_next > K:
                     s_next = K
+                if hasattr(self.grid, '_refill_data') and s_next > s:
+                    # Map positive delta to new data chunks for this cell
+                    try:
+                        self.grid._refill_data(x, y, s_next - s)
+                    except Exception:
+                        # Avoid breaking regrowth if data source misbehaves
+                        pass
                 row[x] = s_next
 
     # -------------------- Coarse teacher feedback --------------------
@@ -474,17 +540,25 @@ class SimpleEnvAdapter:
                 K_total += K
         avg_freshness = (total / K_total) if K_total > 0 else 0.0
         # food_scarcity here represents abundance fraction in [0,1]
+        # Aggregate available data by type if the grid tracks data buffers
+        food_by_type = {
+            'simple_text': 0,
+            'structured_json': 0,
+            'xml_data': 0,
+            'code': 0,
+        }
+        try:
+            buf_counts = self.env.grid.buffer_type_counts()  # type: ignore[attr-defined]
+            for k in list(food_by_type.keys()):
+                food_by_type[k] = int(buf_counts.get(k, 0))
+        except Exception:
+            pass
+
         stats = {
             'total_food_available': total,
             'average_freshness': avg_freshness,
             'food_scarcity': avg_freshness,
-            'food_by_type': {
-                # Simple substrate doesn't distinguish types; provide zeros
-                'simple_text': 0,
-                'structured_json': 0,
-                'xml_data': 0,
-                'code': 0,
-            },
+            'food_by_type': food_by_type,
         }
         return stats
 
