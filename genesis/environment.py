@@ -327,18 +327,27 @@ class SimpleEnvironment:
                 self.grid.set(org.x, org.y, new_stock)
                 # If the grid tracks internet data, ingest corresponding items
                 n_items = int(max(0, math.floor(bite_gain)))
+                energy_from_digest = 0.0
                 if n_items > 0:
                     items = self.grid.consume_data(org.x, org.y, n_items)
                     if items:
+                        # Count items by type and convert to energy via simple digestibility
                         for it in items:
                             org.ingested_counts[it.kind] = org.ingested_counts.get(it.kind, 0) + 1
+                        if self.grid.data_source is not None:
+                            energy_from_digest = self._digest_energy(items)
                 if stock > 0 and new_stock <= 0:
                     # Track depleted patch for low-noise logging
                     depleted.append((org.x, org.y))
-            org.energy += bite_gain
 
-            # Remember observed return for this cell
-            org.remember((org.x, org.y), bite_gain)
+            # Energy gain policy:
+            # Energy comes ONLY from digesting consumed data items. Patch stock
+            # is not energy; it merely gates how many data units can be consumed.
+            org.energy += energy_from_digest
+            remembered_return = energy_from_digest
+
+            # Remember observed return for this cell (based on the true energy return)
+            org.remember((org.x, org.y), remembered_return)
 
             # Optional costly signal
             self._maybe_signal(org, bite_gain)
@@ -411,6 +420,28 @@ class SimpleEnvironment:
             meta={'parent_id': org.id, 'child_id': child.id, 'M_parent': org.M, 'M_child': child.M},
         )
         return child
+
+    # -------------------- Digestion model --------------------
+    def _digest_energy(self, items: List[DataChunk]) -> float:
+        """Convert consumed internet data items into energy.
+
+        Design: Energy reflects how well the organism can digest data. We keep a
+        very lightweight, deterministic mapping by item kind so tests remain
+        stable. This enforces the tenet that food is internet data, not raw
+        patch stock.
+        """
+        if not items:
+            return 0.0
+        # Coarse per-kind energy values; chosen small to keep dynamics gentle
+        kind_energy = {
+            'simple_text': 0.5,
+            'structured_json': 1.0,
+            'xml_data': 0.8,
+        }
+        total = 0.0
+        for ch in items:
+            total += kind_energy.get(ch.kind, 0.5)
+        return total
 
     # -------------------- Region support and modulation --------------------
     def set_regions(self, regions: Dict[str, Tuple[int, int, int, int]]) -> None:

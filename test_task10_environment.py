@@ -1,6 +1,7 @@
 import random
 
 from genesis.environment import PatchGrid, SimpleEnvironment
+from genesis.data_source import OfflineSampleDataSource
 
 
 def test_logistic_regrowth_and_bounds():
@@ -36,6 +37,7 @@ def test_organism_eat_metabolize_and_reproduce():
         signal_threshold=1.0,
         reproduce_threshold=8.0,  # low to trigger reproduction in test
         rng=rng,
+        data_source=OfflineSampleDataSource(),
     )
 
     # Start one organism in the center with moderate energy and honesty 1.0 to simplify
