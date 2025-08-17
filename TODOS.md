@@ -133,9 +133,26 @@ Notes
 File: genesis/evolution.py
 Status: TODO
 
-### 🟡 Task 9: Code Self-Modification Framework
+### ✅ Task 9: Code Self-Modification Framework
 File: genesis/self_modify.py
-Status: TODO
+Status: COMPLETED
+
+What’s implemented (now):
+- SelfModifyManager with conservative, safety‑aware building blocks:
+  - Introspection utilities (snapshot module source and live object summaries)
+  - Parameter tweaks: bounded numeric adjustments with audit log and doom_feed events
+  - Safe code patching: prepare_patch + apply_patch with deny‑list, size guards, atomic write, module reload, optional smoke‑test, and rollback on failure
+- Shadow patching for offspring‑only trials (apply_patch_shadow) with deterministic version IDs and strict safety checks
+- safe_exec helper that evaluates small snippets with a very restricted builtins whitelist and captures stdout
+- Evolution wiring (no env flags required):
+  - READ_SELF enables occasional self‑introspection
+  - MODIFY_PARAM enables tiny, bounded self‑tuning (e.g., learning_rate)
+  - MODIFY_LOGIC/WRITE_CODE enable proposing a shadow behavior for offspring‑only trials
+- Trial manager processes a small trial budget per tick and accepts/rejects children; behavior changes never hot‑patch the parent
+- Tests added (test_task9_self_modify.py): param tweaks and logging; safe_exec constraints; safe vs unsafe patches; smoke‑test rollback; organism self‑tuning and introspection
+
+Notes / optional follow‑ups:
+- Optional persistence of param/patch logs and tightened module allow‑lists if needed later
 
 ### 🔵 Task 10: Environmental Pressures and Simple-Rule Substrate
 File: genesis/environment.py

@@ -70,6 +70,7 @@ The SQLite database is created at organism_saves/organisms.db.
 digital-organism-zoo/
 ├── genesis/
 │   ├── evolution.py      # Core organism + capability system
+│   ├── body_parts.py     # Evolvable, data-driven limbs (sensors/manipulators)
 │   ├── teacher.py        # LLM parent integration
 │   └── ecosystem.py      # World rules and interactions
 ├── data_sources/
@@ -92,6 +93,16 @@ Social: ASK_PARENT, SHARE, TRADE
 Advanced: PREDICT, CREATE, ABSTRACT
   ↓
 Ultimate: READ_SELF, MODIFY_LOGIC, WRITE_CODE
+
+Body parts (limbs)
+- Defined in a data-driven registry (optional JSON: body_parts_registry.json)
+- Genotype BodyPartGenome picks parts and levels; phenotype Body applies effects
+- Effects are soft biases:
+  - Foraging preferences (freshness/difficulty/novelty/type bias)
+  - Digestion metric nudges (C, R, N, K, S) and small cost reductions
+  - Example parts: probe_antenna, manipulator_claw, stabilizer_fins, compressor_gland
+
+You can override or extend parts by creating a body_parts_registry.json at repo root.
 ```
 
 ## Example Organism Lifecycle

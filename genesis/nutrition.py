@@ -235,6 +235,18 @@ class NutritionDatabase:
         if profile.toxicity > 0.0:
             penalties += profile.toxicity * 0.05
 
+        # Body-part modifiers: adjust metrics and costs
+        try:
+            if hasattr(organism, 'get_body_digestion_mods'):
+                mods = organism.get_body_digestion_mods() or {}
+                C = max(0.0, min(1.0, C + float(mods.get('C', 0.0))))
+                R = max(0.0, min(1.0, R + float(mods.get('R', 0.0))))
+                N = max(0.0, min(1.0, N + float(mods.get('N', 0.0))))
+                K = max(0.0, min(1.0, K + float(mods.get('K', 0.0))))
+                S = max(0.0, min(1.0, S + float(mods.get('S', 0.0))))
+        except Exception:
+            pass
+
         Q = wC*C + wR*R + wN*N + wK*K + wS*S - penalties
         # Center Q roughly around 0.5
         theta = 0.5
@@ -248,6 +260,14 @@ class NutritionDatabase:
         try:
             if hasattr(organism, 'parent_help_received') and organism.parent_help_received > 0:
                 parent_cost = min(3.0, 0.5 * organism.parent_help_received)
+        except Exception:
+            pass
+        # Apply body modifiers to costs if provided
+        try:
+            if 'mods' in locals() and isinstance(mods, dict):
+                token_cost = max(0.0, token_cost * (1.0 + float(mods.get('token_cost', 0.0))))
+                cpu_cost = max(0.0, cpu_cost * (1.0 + float(mods.get('cpu_cost', 0.0))))
+                io_cost = max(0.0, io_cost * (1.0 + float(mods.get('io_cost', 0.0))))
         except Exception:
             pass
         total_costs = token_cost + cpu_cost + io_cost + parent_cost

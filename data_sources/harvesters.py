@@ -494,6 +494,47 @@ class DataEcosystem:
             stats['average_freshness'] = sum(m.freshness for m in self.available_food) / len(self.available_food)
         
         return stats
+
+    def preview_food_for_organism(self, organism_capabilities: set, preferences: Dict = None, limit: int = 5) -> List[DataMorsel]:
+        """Preview suitable food without removing it.
+
+        Mirrors the filtering and scoring used in find_food_for_organism but does not
+        mutate internal storage. Intended for 'probe' limbs.
+        """
+        # Filter food by capabilities
+        suitable_food = [
+            morsel for morsel in self.available_food
+            if morsel.is_consumable_by_capabilities(organism_capabilities)
+        ]
+        if not suitable_food:
+            return []
+        # Apply preferences (same subset as find_food_for_organism)
+        prefs = preferences or {}
+        if 'preferred_types' in prefs:
+            pref = [m for m in suitable_food if m.data_type in prefs['preferred_types']]
+            suitable_food = pref if pref else suitable_food
+        min_fresh = prefs.get('min_freshness')
+        if isinstance(min_fresh, (int, float)):
+            suitable_food = [m for m in suitable_food if m.freshness >= max(0.0, min(1.0, float(min_fresh)))]
+        if prefs.get('toxicity_avoid_code'):
+            non_code = [m for m in suitable_food if m.data_type != DataType.CODE]
+            suitable_food = non_code if non_code else suitable_food
+        difficulty_pref = prefs.get('difficulty_preference')
+        region = prefs.get('region')
+        region_bias = self.region_biases.get(region) if region else None
+
+        def score(m: DataMorsel) -> float:
+            base = m.energy_value * m.freshness
+            if difficulty_pref == 'low':
+                base *= 1.0 / (1.0 + 0.3 * max(0, m.difficulty - 1))
+            elif difficulty_pref == 'high':
+                base *= 1.0 + 0.3 * max(0, m.difficulty - 1)
+            if region_bias is not None:
+                base *= float(region_bias.get(m.data_type, 1.0))
+            return base
+
+        suitable_food.sort(key=score, reverse=True)
+        return suitable_food[:max(1, int(limit))]
     
     def stop(self):
         """Stop the data ecosystem"""

@@ -7,6 +7,13 @@ import time
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import hashlib
+# Robust import for script vs package execution
+try:
+    from .body_parts import BodyPartGenome, Body  # type: ignore
+except Exception:
+    import sys as _sys, os as _os
+    _sys.path.append(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from genesis.body_parts import BodyPartGenome, Body  # type: ignore
 
 class Capability(Enum):
     """All evolvable capabilities - start locked, unlock through evolution"""
@@ -503,10 +510,20 @@ class Organism:
         self.social_observations = []  # recent observations of neighbors
         self._trust_map = {}
         self._social_bias = None  # short-horizon imitation (types, strength, ttl)
+        # Task 9: self-modification manager (lazy)
+        self._self_modify_manager = None
         
         # Inherit from parent
         if parent_genome:
             self.inherit(parent_genome)
+
+        # Evolving body parts (limbs)
+        try:
+            self.body_genome = BodyPartGenome.random()
+            self.body = Body(self.body_genome)
+        except Exception:
+            self.body_genome = None
+            self.body = None
     
     def has_capability(self, capability: Capability) -> bool:
         """Check if organism has a specific capability"""
@@ -1051,7 +1068,7 @@ class Organism:
 
         # Different exploration strategies based on attempt number
         if attempt_number == 0:
-            # Build preferences informed by brain drives and metabolic state
+            # Build preferences informed by brain drives, metabolic state, and body parts
             prefs = {'preferred_types': preferred_types} if preferred_types else {}
             drives = getattr(self, '_brain_drives', {}) or {}
             # Difficulty: conserve prefers easy, risk prefers challenging
@@ -1113,6 +1130,12 @@ class Organism:
                     prefs['min_freshness'] = min(1.0, prefs.get('min_freshness', 0.0) + 0.05)
             except Exception:
                 pass
+            # Apply body part biases to preferences
+            try:
+                if getattr(self, 'body', None) is not None:
+                    prefs = self.body.apply_foraging_preferences(prefs)
+            except Exception:
+                pass
             # Use trade board lead to bias first attempt if available
             if drives.get('trade', 0.0) > 0.6:
                 my_region = getattr(self, 'current_region', None)
@@ -1155,6 +1178,14 @@ class Organism:
                         doom_feed.add('intellect', f"{self.id} strategy shaped by knowledge", 1, {'organism': self.id})
             except Exception:
                 pass
+            # Try via limb action if available (consumes if successful)
+            try:
+                if getattr(self, 'body', None) is not None:
+                    res = self.body.call_action('grasp_consume', organism=self, data_ecosystem=data_ecosystem, nutrition_system=nutrition_system, preferences=prefs)
+                    if isinstance(res, dict) and res.get('ok'):
+                        return None
+            except Exception:
+                pass
             return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         elif attempt_number == 1:
             # Try second-best preference or bias by risk
@@ -1177,6 +1208,20 @@ class Organism:
                 if drives.get('conserve', 0.0) > 0.6:
                     prefs['difficulty_preference'] = 'low'
                     prefs['min_freshness'] = 0.5
+                # Apply body preferences again
+                try:
+                    if getattr(self, 'body', None) is not None:
+                        prefs = self.body.apply_foraging_preferences(prefs)
+                except Exception:
+                    pass
+                # Try limb-based consumption again with refined prefs
+                try:
+                    if getattr(self, 'body', None) is not None:
+                        res = self.body.call_action('grasp_consume', organism=self, data_ecosystem=data_ecosystem, nutrition_system=nutrition_system, preferences=prefs)
+                        if isinstance(res, dict) and res.get('ok'):
+                            return None
+                except Exception:
+                    pass
                 return data_ecosystem.find_food_for_organism(self.capabilities, prefs)
         else:
             # Desperate exploration
@@ -1185,6 +1230,24 @@ class Organism:
             return data_ecosystem.find_food_for_organism(self.capabilities)
         
         return None
+
+    # Body integration for digestion metrics
+    def get_body_digestion_mods(self) -> dict:
+        try:
+            if getattr(self, 'body', None) is None:
+                return {}
+            return self.body.aggregation_digestion_mods()
+        except Exception:
+            return {}
+
+    # Convenience: organism-level limb API
+    def use_limb(self, action: str, **kwargs) -> dict:
+        try:
+            if getattr(self, 'body', None) is None:
+                return {"ok": False, "error": "no_body"}
+            return self.body.call_action(action, organism=self, **kwargs)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
     
     def _process_found_food(self, food_morsel, nutrition_system):
         """Process found food with nutritional system AND extract real knowledge"""
@@ -2025,6 +2088,15 @@ class Organism:
             self.attempt_evolution()
         # Decay any short-lived imitation pressure
         self._decay_social_bias()
+        # Task 9: gated self-introspection and tiny param self-tuning
+        try:
+            if Capability.READ_SELF in self.capabilities and random.random() < 0.02:
+                self._maybe_self_introspect()
+            if Capability.MODIFY_PARAM in self.capabilities and random.random() < 0.02:
+                # Tiny, bounded learning rate tweak
+                self.self_tune_parameters('learning_rate', factor=random.uniform(0.98, 1.02), min_value=0.005, max_value=1.0)
+        except Exception:
+            pass
     
     def can_process(self, environment):
         """Check if organism has capabilities for this situation"""
@@ -2307,9 +2379,9 @@ class Organism:
         best_mate = max(potential_mates, key=lambda org: getattr(org, 'current_fitness', 0.5))
         return best_mate
     
-    def reproduce(self, mate=None, fitness_culture_system=None):
+    def reproduce(self, mate=None, fitness_culture_system=None, behavior_version=None):
         """Create offspring with mate using proper inheritance"""
-        
+
         if not self.can_reproduce():
             return None
         
@@ -2361,7 +2433,34 @@ class Organism:
                     pass
         except Exception:
             pass
+        # Inherit and mutate body parts (limbs)
+        try:
+            parent_src = self if getattr(self, 'current_fitness', 0.0) >= getattr(mate, 'current_fitness', 0.0) else mate
+            pg = getattr(parent_src, 'body_genome', None)
+            if pg and hasattr(pg, 'to_dict'):
+                from genesis.body_parts import BodyPartGenome, Body
+                cloned = BodyPartGenome.from_dict(pg.to_dict())
+                cloned.mutate(rate=0.25)
+                child.body_genome = cloned
+                child.body = Body(cloned)
+        except Exception:
+            pass
         
+        # If a behavior version is provided and trials are enabled, bind it to the child.
+        try:
+            if behavior_version is not None:
+                self._bind_behavior_version_to_child(child, behavior_version)
+        except Exception:
+            pass
+        # Offspring-only behavior trial via shadow module when unlocked
+        try:
+            if Capability.MODIFY_LOGIC in self.capabilities or Capability.WRITE_CODE in self.capabilities:
+                bv_local = self.propose_behavior_patch('genesis.stream', lambda src: src + "\n# trial_patch\n")
+                if bv_local is not None:
+                    self._bind_behavior_version_to_child(child, bv_local)
+        except Exception:
+            pass
+
         # Track reproductive success
         self.offspring_count += 1
         mate.offspring_count += 1
@@ -2371,8 +2470,87 @@ class Organism:
             self.teach_offspring(child)
         
         print(f"👶 Reproduction: {self.id} + {mate.id} → {child.id} (gen {child.generation})")
-        
+
         return child
+
+    # -------------------- Task 9: Offspring-scoped code changes --------------------
+    def propose_behavior_patch(self, module_name: str, transform):
+        """Propose a behavior code change as a shadow module.
+
+        Returns a BehaviorVersion if successful. No global code is changed.
+        Requires code capabilities at the caller's discretion.
+        """
+        try:
+            from genesis.self_modify import SelfModifyManager
+            sm = getattr(self, '_self_modify_manager', None)
+            if sm is None:
+                sm = SelfModifyManager()
+                self._self_modify_manager = sm
+            patch = sm.prepare_patch(module_name, transform)
+            bv = sm.apply_patch_shadow(patch)
+            return bv
+        except Exception as e:
+            try:
+                from genesis.stream import doom_feed
+                doom_feed.add('shadow_patch_failed', f"{self.id}: {e}", 2, {'organism': self.id})
+            except Exception:
+                pass
+            return None
+
+    def _bind_behavior_version_to_child(self, child, behavior_version):
+        """Attach a behavior version to a child organism.
+
+        This does not hot-patch the current organism. The child will carry
+        metadata and can route behavior through the version if higher-level
+        logic adopts registries in the future.
+        """
+        try:
+            child._behavior_version = {
+                'id': getattr(behavior_version, 'version_id', ''),
+                'base_module': getattr(behavior_version, 'base_module', ''),
+                'shadow_module': getattr(behavior_version, 'shadow_module', ''),
+                'file_path': getattr(behavior_version, 'file_path', ''),
+            }
+            # If a behavior version is bound, mark child as in a trial unconditionally
+            child.in_trial = True
+            from genesis.stream import doom_feed
+            mv = child._behavior_version
+            doom_feed.add('behavior_version', f"{child.id} bound {mv['shadow_module'].split('.')[-1]}", 1, {'organism': child.id})
+        except Exception:
+            pass
+
+    # -------------------- Task 9: Capability-gated self-mod primitives --------------------
+    def _get_sm(self):
+        try:
+            from genesis.self_modify import SelfModifyManager
+        except Exception:
+            return None
+        if self._self_modify_manager is None:
+            self._self_modify_manager = SelfModifyManager()
+        return self._self_modify_manager
+
+    def _maybe_self_introspect(self) -> None:
+        sm = self._get_sm()
+        if sm is None:
+            return
+        try:
+            sm.snapshot_module_source('genesis.evolution')
+            self.introspection_attempts += 1
+            from genesis.stream import doom_feed
+            doom_feed.add('introspect', f"{self.id} read own code", 1, {'organism': self.id})
+        except Exception:
+            # Keep silent; introspection is best-effort
+            pass
+
+    def self_tune_parameters(self, attr: str = 'learning_rate', *, factor: float = 1.0, min_value: Optional[float] = None, max_value: Optional[float] = None) -> bool:
+        """Attempt a bounded numeric tweak to a trait when MODIFY_PARAM is unlocked."""
+        if Capability.MODIFY_PARAM not in self.capabilities:
+            return False
+        sm = self._get_sm()
+        if sm is None:
+            return False
+        return bool(sm.try_adjust_param(self.traits, attr, factor, min_value=min_value, max_value=max_value))
+
     
     def modify_own_code(self):
         """The ultimate evolution - rewrite self"""
@@ -2938,6 +3116,42 @@ def run_indefinite_zoo(config: dict = None):
         tick = 0
         print("🔄 Starting indefinite evolution loop...")
         print("🛑 Press Ctrl+C to stop gracefully and save state")
+        # Task 9: Optional behavior trial manager (offspring-only code changes)
+        class _BehaviorTrialManager:
+            def __init__(self):
+                self.queue = []  # entries contain {'child', 'parent', 'mate', 'ts'}
+            def enqueue(self, child, parent=None, mate=None):
+                self.queue.append({'child': child, 'parent': parent, 'mate': mate, 'ts': time.time()})
+            def process(self, budget: int = 1):
+                accepted, rejected = [], []
+                for _ in range(min(budget, len(self.queue))):
+                    entry = self.queue.pop(0)
+                    ch = entry['child']
+                    ok = True
+                    try:
+                        bv = getattr(ch, '_behavior_version', None)
+                        if not (bv and bv.get('shadow_module')):
+                            ok = False
+                        else:
+                            __import__(bv['shadow_module'])
+                    except Exception:
+                        ok = False
+                    if ok:
+                        accepted.append(ch)
+                        try:
+                            from genesis.stream import doom_feed
+                            doom_feed.add('trial_accept', f"{ch.id}", 1, {'organism': ch.id})
+                        except Exception:
+                            pass
+                    else:
+                        rejected.append(ch)
+                        try:
+                            from genesis.stream import doom_feed
+                            doom_feed.add('trial_reject', f"{ch.id}", 2)
+                        except Exception:
+                            pass
+                return accepted, rejected
+        trial_mgr = _BehaviorTrialManager()
         
         while True:  # INDEFINITE RUNTIME - run forever until manually stopped
             tick += 1
@@ -3002,7 +3216,15 @@ def run_indefinite_zoo(config: dict = None):
                     if mate and random.random() < 0.1:  # 10% chance per tick
                         child = organism.reproduce(mate, fitness_culture_system)
                         if child:
-                            organisms.append(child)
+                            if getattr(child, 'in_trial', False):
+                                trial_mgr.enqueue(child, parent=organism, mate=mate)
+                            else:
+                                organisms.append(child)
+
+            # Process a limited number of behavior trials per tick
+            accepted, rejected = trial_mgr.process(budget=1)
+            if accepted:
+                organisms.extend(accepted)
             
             # Process batched help requests
             if day % 10 == 0:
