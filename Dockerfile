@@ -35,5 +35,5 @@ HEALTHCHECK --interval=30s --timeout=3s \
 
 USER organism
 
-# Start ecosystem
-CMD ["python", "genesis/ecosystem.py"]
+# Start runtime (internet-backed by default). Set RUN_MODE=simple to run the local grid.
+CMD ["python", "genesis/evolution.py"]

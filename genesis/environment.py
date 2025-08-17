@@ -341,10 +341,12 @@ class SimpleEnvironment:
                     depleted.append((org.x, org.y))
 
             # Energy gain policy:
-            # Energy comes ONLY from digesting consumed data items. Patch stock
-            # is not energy; it merely gates how many data units can be consumed.
-            org.energy += energy_from_digest
-            remembered_return = energy_from_digest
+            # Primary energy comes from the bite taken out of the local stock
+            # (simple substrate mechanics). If internet data buffers are
+            # enabled, digesting consumed items yields a small bonus on top.
+            total_energy_gain = bite_gain + energy_from_digest
+            org.energy += total_energy_gain
+            remembered_return = total_energy_gain
 
             # Remember observed return for this cell (based on the true energy return)
             org.remember((org.x, org.y), remembered_return)

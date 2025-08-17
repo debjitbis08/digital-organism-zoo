@@ -42,6 +42,15 @@ DEFAULT_SENSORS = [
     'recent_success',             # recent foraging success rate
     'metabolic_efficiency',       # derived from metabolic tracker
     'novelty_hunger',             # desire for novelty vs repetition
+    # Data-ingestion sensors (middle layer between raw data and brain)
+    'data_energy',                # normalized energy value from the morsel
+    'data_freshness',             # morsel freshness 0..1
+    'data_difficulty',            # normalized difficulty 0..1
+    'data_size',                  # normalized size
+    'data_type_text',             # one-hot
+    'data_type_structured',
+    'data_type_xml',
+    'data_type_code',
 ]
 DEFAULT_ACTUATORS = [
     'explore',
@@ -97,26 +106,20 @@ class BrainGenome:
         topo = self.data.get('topology', {'in': 6, 'hid': 6, 'out': 3})
         in_dim, hid_dim, out_dim = topo.get('in', 6), topo.get('hid', 6), topo.get('out', 3)
 
-        # 1) Occasionally mutate hidden size (topology mutation)
+        # 1) Occasionally mutate hidden size (growth-biased: non-decreasing, no hard cap)
         if random.random() < 0.15:
-            new_hid = max(2, min(12, hid_dim + random.choice([-1, 1])))
-            if new_hid != hid_dim:
-                self._resize_hidden(new_hid)
-                self.data['topology']['hid'] = new_hid
-                hid_dim = new_hid
+            new_hid = hid_dim + 1
+            self._resize_hidden(new_hid)
+            self.data['topology']['hid'] = new_hid
+            hid_dim = new_hid
 
         # 1b) Occasionally mutate sensors (inputs)
         if random.random() < 0.08:
             sensors = self.data.get('sensors', list(DEFAULT_SENSORS))
-            # Try add or remove with equal chance
-            if random.random() < 0.5 and len(sensors) > 3:
-                # remove last
-                sensors = sensors[:-1]
-            else:
-                # add one if available
-                candidates = [s for s in DEFAULT_SENSORS if s not in sensors]
-                if candidates:
-                    sensors.append(random.choice(candidates))
+            # Growth-only: add one if available
+            candidates = [s for s in DEFAULT_SENSORS if s not in sensors]
+            if candidates:
+                sensors.append(random.choice(candidates))
             new_in = len(sensors)
             if new_in != in_dim:
                 self._resize_inputs(new_in)
@@ -127,12 +130,10 @@ class BrainGenome:
         # 1c) Occasionally mutate actuators (outputs)
         if random.random() < 0.08:
             actuators = self.data.get('actuators', list(DEFAULT_ACTUATORS))
-            if random.random() < 0.5 and len(actuators) > 3:
-                actuators = actuators[:-1]
-            else:
-                candidates = [a for a in DEFAULT_ACTUATORS if a not in actuators]
-                if candidates:
-                    actuators.append(random.choice(candidates))
+            # Growth-only: add one if available
+            candidates = [a for a in DEFAULT_ACTUATORS if a not in actuators]
+            if candidates:
+                actuators.append(random.choice(candidates))
             new_out = len(actuators)
             if new_out != out_dim:
                 self._resize_outputs(new_out)

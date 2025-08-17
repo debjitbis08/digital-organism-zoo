@@ -817,6 +817,101 @@ class Organism:
         if self.foraging_success_rate < 0.3 and self.energy < 50:
             self.frustration += 0.1
 
+    def _brain_talk_from_acts(self, top_acts):
+        """Generate a brain-only utterance from actuator tops, with complexity growing over time.
+
+        top_acts: list of (actuator_name, value)
+        """
+        # Vocabulary grows with knowledge and age
+        insights = 0
+        if getattr(self, 'knowledge_base', None):
+            try:
+                insights = int(self.knowledge_base.get_knowledge_summary().get('total_insights', 0))
+            except Exception:
+                insights = 0
+        complexity = 1 + min(3, insights // 5) + min(2, self.age // 200)
+        # Extract learned tokens from knowledge to enrich talk dynamically
+        learned_tokens = self._learned_tokens(max_tokens=8)
+        act_words = {
+            'explore': ['seek', 'scout', 'range', 'venture'],
+            'conserve': ['save', 'reserve', 'steady'],
+            'risk': ['dare', 'press', 'gamble'],
+            'teach': ['teach', 'explain', 'guide'],
+            'trade': ['offer', 'barter', 'swap'],
+            'social': ['greet', 'signal', 'hail'],
+            'migrate': ['migrate', 'drift', 'roam'],
+            'prefer_structured': ['favor structure', 'prefer order'],
+        }
+        # Map top acts to verbs (base set)
+        base_words = []
+        for a, v in top_acts:
+            bank = act_words.get(a, [a])
+            idx = 0 if v < 0.33 else (1 if v < 0.66 else -1)
+            w = bank[min(len(bank)-1, idx)]
+            base_words.append(w)
+        # Build utterance proportional to complexity, reusing and varying words when needed
+        mod_adverbs = ['softly', 'boldly', 'together', 'today', 'again', 'now']
+        phrases = []
+        span = max(1, complexity)
+        for i in range(span):
+            if base_words:
+                w = base_words[i % len(base_words)]
+            else:
+                w = 'hum'
+            # Occasionally append an adverb for variety as complexity grows
+            if complexity >= 2 and i % 2 == 1:
+                w = f"{w} {mod_adverbs[(self.age // 17 + i) % len(mod_adverbs)]}"
+            # Occasionally append a learned token to tie to consumed data
+            if learned_tokens and (i % 3 == 2 or (complexity >= 3 and i == 0)):
+                tok = learned_tokens[(self.age // 23 + i) % len(learned_tokens)]
+                w = f"{w} {tok}"
+            if i == 0:
+                phrases.append(w.capitalize())
+            else:
+                phrases.append(w)
+        # Add simple connectors as complexity grows
+        if complexity >= 3 and len(phrases) >= 2:
+            connectors = ['and', 'thus', 'then']
+            # Insert a connector between first two
+            phrases[0] = phrases[0] + ','
+            phrases.insert(1, connectors[(self.age // 50) % len(connectors)])
+        if complexity >= 4:
+            # Add a modal
+            tail = ['consider', 'persist', 'return', 'pause'][(self.age // 30) % 4]
+            phrases.append(tail)
+        return ' '.join(phrases)
+
+    def _learned_tokens(self, max_tokens: int = 8):
+        """Harvest simple, meaningful tokens from the knowledge base to enrich talk.
+
+        Returns a small list of frequent tokens (lowercased), excluding stopwords.
+        """
+        kb = getattr(self, 'knowledge_base', None)
+        if not kb or not hasattr(kb, 'knowledge_items') or not kb.knowledge_items:
+            return []
+        try:
+            import re
+            from collections import Counter
+            stop = {
+                'the','a','an','and','or','but','to','of','in','on','for','with','by','is','are','was','were','be','this','that','it','as','at','from','into','about','over','under','after','before','between','within','without','we','they','you','i','their','our','your','his','her','its','these','those'
+            }
+            text = ' '.join(k.content for k in kb.knowledge_items[-20:] if getattr(k, 'content', None))
+            tokens = re.findall(r"[A-Za-z]{3,15}", text)
+            tokens = [t.lower() for t in tokens if t.lower() not in stop]
+            if not tokens:
+                return []
+            counts = Counter(tokens)
+            # Prefer technical-ish or salient words
+            # Lightweight boost for known cues
+            cues = {'api','data','json','xml','code','trend','topic','news','feed','tag','parse','graph','model','vision','nlp','learn','memory'}
+            for t in list(counts.keys()):
+                if t in cues:
+                    counts[t] += 2
+            top = [w for w, _ in counts.most_common(max_tokens)]
+            return top
+        except Exception:
+            return []
+
     def _compute_brain_drives(self, data_ecosystem=None, nutrition_system=None):
         """Run the organism's brain to compute simple behavior drives.
         Produces a dict with keys like 'explore' and 'social'.
@@ -1140,6 +1235,58 @@ class Organism:
         
         self.energy += energy_gained
 
+        # Run the brain on data-ingestion sensors to expose digestion output
+        try:
+            if self.brain:
+                # Build sensor map covering known brain sensors; default zeros
+                sensor_map = {}
+                # Baseline signals if previously computed
+                if hasattr(self, '_last_sensor_map') and isinstance(self._last_sensor_map, dict):
+                    sensor_map.update(self._last_sensor_map)
+                # Data-specific sensors (normalized)
+                ev = float(getattr(food_morsel, 'energy_value', energy_gained))
+                size = float(getattr(food_morsel, 'size', 0) or 0)
+                fresh = float(getattr(food_morsel, 'freshness', 1.0) or 0.0)
+                diff = float(getattr(food_morsel, 'difficulty', 1) or 1)
+                sensor_map.update({
+                    'data_energy': max(0.0, min(1.0, ev / 30.0)),
+                    'data_freshness': max(0.0, min(1.0, fresh)),
+                    'data_difficulty': max(0.0, min(1.0, diff / 5.0)),
+                    'data_size': max(0.0, min(1.0, size / 10000.0)),
+                    'data_type_text': 1.0 if getattr(food_morsel, 'data_type', None) and food_morsel.data_type.value == 'simple_text' else 0.0,
+                    'data_type_structured': 1.0 if getattr(food_morsel, 'data_type', None) and food_morsel.data_type.value == 'structured_json' else 0.0,
+                    'data_type_xml': 1.0 if getattr(food_morsel, 'data_type', None) and food_morsel.data_type.value == 'xml_data' else 0.0,
+                    'data_type_code': 1.0 if getattr(food_morsel, 'data_type', None) and food_morsel.data_type.value == 'code' else 0.0,
+                })
+                # Assemble input vector ordered by brain.sensors
+                inputs = [float(sensor_map.get(k, 0.0)) for k in getattr(self.brain, 'sensors', [])]
+                y = self.brain.forward(inputs)
+                # Map to actuator names
+                acts = getattr(self.brain, 'actuators', [])
+                out = {acts[i]: float(y[i]) for i in range(min(len(acts), len(y)))}
+                # Keep the top 3 for readability
+                top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                self.last_digestion = {'type': food_morsel.data_type.value, 'top': top, 'all': out}
+                try:
+                    from genesis.stream import doom_feed
+                    desc = ", ".join(f"{k}={v:.2f}" for k, v in top)
+                    doom_feed.add('digestion', f"{self.id} digested {food_morsel.data_type.value} -> {desc}", 1,
+                                  {'organism': self.id})
+                except Exception:
+                    pass
+                # Convert digestion outputs into immediate, brain-only chatter
+                try:
+                    msg = self._brain_talk_from_acts(top)
+                    try:
+                        doom_feed.add('chatter', f"{self.id}: {msg}", 1, {'organism': self.id})
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            # Digestion introspection is best-effort only
+            pass
+
         # Reinforcement: if this success followed a trade/teaching lead, record it and surface
         try:
             if hasattr(self, '_lead_context') and self._lead_context:
@@ -1206,7 +1353,9 @@ class Organism:
                 latest = self.knowledge_base.knowledge_items[-1]
                 recent_insights = f"\n   🧠 Learned: {latest.content}"
         
-        print(f"🍽️  Organism {self.id} ate {food_morsel.data_type.value} from {food_morsel.source} (+{energy_gained} energy){learning_msg}{recent_insights}")
+        print(f"🍽️  Organism {self.id} ate {food_morsel.data_type.value} from {food_morsel.source} (+{energy_gained} energy){learning_msg}")
+
+        # Brain growth now occurs only on reproduction (in children)
 
     # -------------------- Task 7: Social learning helpers --------------------
     def _observe_neighbor(self, neighbor_id: str, behavior: str, context: Dict[str, Any], outcome: Dict[str, Any]):
@@ -1542,7 +1691,15 @@ class Organism:
                     self.traits.cooperation = min(1.0, self.traits.cooperation + 0.05)
                 
                 if self.age % 50 == 0 and self._behavior_modifiers['trend_following'] > 0.3:
-                    print(f"📊 Organism {self.id} notices data patterns (pattern recognition: {self._behavior_modifiers['trend_following']:.2f})")
+                    # Surface an example token of the detected 'pattern'
+                    sample_tok = ''
+                    try:
+                        toks = self._learned_tokens(max_tokens=1)
+                        if toks:
+                            sample_tok = f", e.g., '{toks[0]}'"
+                    except Exception:
+                        pass
+                    print(f"📊 Organism {self.id} notices data patterns (pattern recognition: {self._behavior_modifiers['trend_following']:.2f}{sample_tok})")
             
             # BEHAVIOR 3: Code-experienced organisms become more creative and exploratory  
             code_insights = [k for k in recent_knowledge if 'function' in k.content.lower() or 'import' in k.content.lower()]
@@ -1653,16 +1810,14 @@ class Organism:
                 pass
             
         elif getattr(self, 'knowledge_base', None) and self.knowledge_base.knowledge_items:
-            # Sometimes share interesting discoveries
+            # Sometimes share that they learned something, without quoting raw input
             if random.random() < (0.05 + 0.1 * social_drive):  # stronger with social drive
-                recent = self.knowledge_base.knowledge_items[-1]
-                if recent.usefulness > 0.6:
-                    print(f"💡 Organism {self.id} shares discovery: {recent.content}")
-                    try:
-                        from genesis.stream import doom_feed
-                        doom_feed.add('share', f"{self.id} shares: {recent.content}", 1, {'organism': self.id})
-                    except Exception:
-                        pass
+                print(f"💡 Organism {self.id} shares: understanding grows")
+                try:
+                    from genesis.stream import doom_feed
+                    doom_feed.add('share', f"{self.id} reflects on learning", 1, {'organism': self.id})
+                except Exception:
+                    pass
         
         # React to frustration by calling for help
         if hasattr(self, 'frustration') and self.frustration > 0.8 and random.random() < 0.2:
@@ -1672,23 +1827,39 @@ class Organism:
                 doom_feed.add('frustration', f"{self.id} is frustrated", 2, {'organism': self.id})
             except Exception:
                 pass
-        # Occasional chatter: share a snippet from memory or recent insights
+        # Occasional chatter: emit brain-driven talk only (no raw input snippets)
         if random.random() < 0.2:
-            options = []
-            if hasattr(self, 'memory') and self.memory:
-                options.extend(self.memory[-5:])
-            if getattr(self, 'knowledge_base', None) and getattr(self.knowledge_base, 'knowledge_items', None):
-                options.extend(k.content for k in self.knowledge_base.knowledge_items[-5:])
-            if options:
-                msg = random.choice(options)
-            else:
-                msg = '[silent contemplative humming]'
-            print(f"💬 Organism {self.id} chatter: {msg}")
+            msg = '[silent contemplative humming]'
+            top = None
+            if hasattr(self, 'last_digestion'):
+                top = self.last_digestion.get('top')
+            if top:
+                msg = self._brain_talk_from_acts(top)
             try:
                 from genesis.stream import doom_feed
                 doom_feed.add('chatter', f"{self.id}: {msg}", 1, {'organism': self.id})
             except Exception:
                 pass
+
+        # Passive listening: sometimes respond to recent chatter from others
+        try:
+            if random.random() < 0.15:
+                from genesis.stream import doom_feed
+                recent = doom_feed.get_recent(20)
+                # Find last chatter not from self
+                other = None
+                for evt in reversed(recent):
+                    if evt.get('tag') == 'chatter':
+                        msg = evt.get('message', '')
+                        if not msg.startswith(f"{self.id}:"):
+                            other = msg
+                            break
+                if other:
+                    # Brain-shaped reply
+                    reply = self._brain_talk_from_acts(self.last_digestion.get('top')) if getattr(self, 'last_digestion', None) else 'ack'
+                    doom_feed.add('chatter', f"{self.id}: {reply}", 1, {'organism': self.id, 'reply_to': other})
+        except Exception:
+            pass
 
         # Teaching inclination influenced by social drive and teach actuator
         if getattr(self, 'knowledge_base', None):
@@ -1912,30 +2083,7 @@ class Organism:
         # Random mutation
         if random.random() < self.traits.learning_rate:
             self.traits.mutate()
-            # Occasionally mutate brain genome as part of organism evolution
-            if self.brain_genome and random.random() < 0.05:
-                # Snapshot old hidden size to report growth/pruning
-                try:
-                    old_hid = self.brain_genome.data.get('topology', {}).get('hid', None)
-                except Exception:
-                    old_hid = None
-                self.brain_genome.mutate()
-                try:
-                    from genesis.brain import Brain
-                    self.brain = Brain(self.brain_genome)
-                except Exception:
-                    pass
-                try:
-                    from genesis.stream import doom_feed
-                    new_hid = self.brain_genome.data.get('topology', {}).get('hid', old_hid)
-                    if old_hid is not None and new_hid is not None and new_hid != old_hid:
-                        change = 'grew' if new_hid > old_hid else 'pruned'
-                        doom_feed.add('evolution', f"{self.id}'s brain {change} hidden layer {old_hid}->{new_hid}", 2,
-                                      {'organism': self.id})
-                    else:
-                        doom_feed.add('evolution', f"{self.id}'s brain rewired itself", 2, {'organism': self.id})
-                except Exception:
-                    pass
+            # Brain topology changes are restricted to reproduction (children only)
             # Interface shaping based on experience (Task 5):
             # With moderate probability, adapt sensor/actuator gene sets toward useful signals/actions
             if self.brain_genome and random.random() < self._get_interface_adapt_rate():
@@ -2192,6 +2340,27 @@ class Organism:
         
         # Create child
         child = Organism(offspring_genome['generation'], offspring_genome)
+        # Inherit and grow brain only in child
+        try:
+            from genesis.brain import BrainGenome, Brain
+            # Copy one parent's brain genome (choose fitter parent)
+            parent_src = self if getattr(self, 'current_fitness', 0.0) >= getattr(mate, 'current_fitness', 0.0) else mate
+            pg = getattr(parent_src, 'brain_genome', None)
+            if pg and hasattr(pg, 'to_dict'):
+                cloned = BrainGenome.from_dict(pg.to_dict())
+                # Growth step: increase hidden size by +1 and rebuild
+                cloned.mutate()  # our mutate is growth-biased (+1 hidden) with no cap
+                child.brain_genome = cloned
+                child.brain = Brain(cloned)
+                try:
+                    from genesis.stream import doom_feed
+                    hid = cloned.data.get('topology', {}).get('hid')
+                    doom_feed.add('brain_grow', f"Child {child.id} brain grew (hid={hid})", 1,
+                                  {'parent_a': self.id, 'parent_b': mate.id})
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Track reproductive success
         self.offspring_count += 1
@@ -2246,72 +2415,178 @@ class Organism:
         
         return None
 
-# Example of organism ecosystem with real data harvesting
+# Example of organism ecosystem runtime
 if __name__ == "__main__":
-    print("🌱 Starting Digital Organism Zoo with Real Data Ecosystem...")
-    # Task 10: Default to simple-rule environmental substrate run (no feature flag).
-    # This provides a minimal grid-world with local rules, signals, and reproduction.
-    try:
-        from genesis.environment import SimpleEnvironment
-        from genesis.stream import doom_feed
-        import random as _rand
-        import time as _time
+    # When executed as a script (python genesis/evolution.py), this module name
+    # is __main__. Some components import Capability from 'genesis.evolution'.
+    # Alias this module into sys.modules so both sides share the same Enum
+    # identity and capability checks work.
+    import sys as _sys, os as _os
+    _sys.modules['genesis.evolution'] = _sys.modules[__name__]
+    import os as _os
+    run_mode = _os.getenv('RUN_MODE', 'internet').lower()
+    if run_mode == 'simple':
+        print("🌱 Starting SimpleEnvironment (local grid substrate)...")
+        try:
+            from genesis.environment import SimpleEnvironment
+            from genesis.stream import doom_feed
+            import random as _rand
+            import time as _time
 
-        rng = _rand.Random()
-        env = SimpleEnvironment(20, 12, K=12.0, r=0.22, noise_std=0.01, bite=2.5, sense_radius=1, rng=rng)
+            rng = _rand.Random()
+            env = SimpleEnvironment(20, 12, K=12.0, r=0.22, noise_std=0.01, bite=2.5, sense_radius=1, rng=rng)
 
-        # Define regions aligned with virtual regions used elsewhere
-        env.set_regions({
-            'text-meadow': (0, 0, 6, 12),
-            'structured-rich': (6, 0, 13, 12),
-            'code-rich': (13, 0, 20, 12),
+            env.set_regions({
+                'text-meadow': (0, 0, 6, 12),
+                'structured-rich': (6, 0, 13, 12),
+                'code-rich': (13, 0, 20, 12),
+            })
+            env.set_region_params('structured-rich', K=16.0)
+            env.set_region_params('code-rich', r=0.28)
+
+            for i in range(12):
+                x = rng.randrange(env.grid.width)
+                y = rng.randrange(env.grid.height)
+                energy = rng.uniform(4.0, 8.0)
+                M = rng.choice([0, 1, 2, 3, 4])
+                eps = rng.uniform(0.05, 0.35)
+                h = rng.uniform(0.6, 0.95)
+                env.add_organism(x, y, energy=energy, M=M, epsilon=eps, honesty=h)
+
+            tick = 0
+            print("🔄 Running simple-rule environment (Ctrl+C to stop)...")
+            while True:
+                tick += 1
+                env.step()
+
+                if tick % 200 == 0:
+                    env.apply_teacher_modulation({'code-rich': {'noise_std': 0.05 if (tick // 200) % 2 == 1 else 0.005}})
+
+                if tick % 50 == 0:
+                    alive = len(env.organisms)
+                    avgE = sum(o.energy for o in env.organisms) / max(1, alive)
+                    doom_feed.add('summary', f"Tick {tick}: {alive} alive, avgE={avgE:.2f}", 1)
+                _time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("\n🛑 Stopped simple-rule environment.")
+            raise SystemExit(0)
+    else:
+        # Default: Internet-backed DataEcosystem with background evolution loop and HTTP endpoints
+        print("📡 Starting DataEcosystem with HTTP endpoints (/:, /health, /stats)...")
+        # Ensure package root is on sys.path when running as a script
+        try:
+            from genesis.ecosystem import create_app, RuntimeManager  # type: ignore
+        except Exception:
+            import sys as _sys, os as _os
+            _sys.path.append(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+            from genesis.ecosystem import create_app, RuntimeManager  # type: ignore
+
+        # Build ecosystem and start organisms in a background loop
+        from data_sources.harvesters import DataEcosystem
+        from genesis.nutrition import create_enhanced_nutrition_system
+        from genesis.parent_care import ActiveParentCareSystem
+
+        eco = DataEcosystem({
+            'rss_feeds': ['https://hnrss.org/frontpage'],
+            'watch_paths': ['/tmp'],
+            'harvest_interval': int(_os.getenv('HARVEST_INTERVAL', '10')),
+            'max_food_storage': int(_os.getenv('MAX_FOOD_STORAGE', '300')),
+            'scarcity_threshold': 80,
         })
-        # Initial region parameter tweaks
-        env.set_region_params('structured-rich', K=16.0)
-        env.set_region_params('code-rich', r=0.28)
 
-        # Seed organisms
-        for i in range(12):
-            x = rng.randrange(env.grid.width)
-            y = rng.randrange(env.grid.height)
-            energy = rng.uniform(4.0, 8.0)
-            M = rng.choice([0, 1, 2, 3, 4])
-            eps = rng.uniform(0.05, 0.35)
-            h = rng.uniform(0.6, 0.95)
-            env.add_organism(x, y, energy=energy, M=M, epsilon=eps, honesty=h)
+        runtime = RuntimeManager()
 
-        tick = 0
-        print("🔄 Running simple-rule environment (Ctrl+C to stop)...")
-        while True:
-            tick += 1
-            env.step()
+        # Seed a small population
+        organisms = [Organism(generation=0) for _ in range(3)]
+        # Give a small nudge at boot: remembering helps initial foraging
+        for o in organisms:
+            try:
+                from genesis.evolution import Capability as _Cap
+                o.capabilities.add(_Cap.REMEMBER)
+            except Exception:
+                pass
+        nutrition_system = create_enhanced_nutrition_system()
+        parent_care = ActiveParentCareSystem()
 
-            # Occasional coarse teacher-like modulation of environment
-            if tick % 200 == 0:
-                env.apply_teacher_modulation({'code-rich': {'noise_std': 0.05 if (tick // 200) % 2 == 1 else 0.005}})
+        import threading as _th, time as _time
+        _stop_flag = _th.Event()
 
-            # Periodic summaries
-            if tick % 50 == 0:
-                alive = len(env.organisms)
-                avgE = sum(o.energy for o in env.organisms) / max(1, alive)
-                doom_feed.add('summary', f"Tick {tick}: {alive} alive, avgE={avgE:.2f}", 1)
-            if tick % 250 == 0:
+        def _brain_params(brain) -> int:
+            """Report core brain size as hidden layer width (growth-only metric)."""
+            try:
+                topo = getattr(brain, 'topology', {})
+                return int(topo.get('hid', 0))
+            except Exception:
+                return 0
+
+        def _loop():
+            while not _stop_flag.is_set():
+                runtime.ticks += 1
+                # Let each organism live one step
+                for o in list(organisms):
+                    o.live(eco, nutrition_system, parent_care)
+                    if o.energy <= 0:
+                        try:
+                            organisms.remove(o)
+                        except ValueError:
+                            pass
+                # Aggregate runtime summary
+                a = len(organisms)
+                runtime.alive = a
+                if a:
+                    runtime.avg_energy = sum(o.energy for o in organisms) / a
+                else:
+                    runtime.avg_energy = 0.0
+                # Average brain size (parameter count)
+                sizes = []
+                for o in organisms:
+                    b = getattr(o, 'brain', None)
+                    if b is not None:
+                        sizes.append(_brain_params(b))
+                runtime.avg_brain_size = (sum(sizes) / len(sizes)) if sizes else 0.0
+                # Collect recent chatter from doom_feed
                 try:
-                    import statistics
-                    left = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(0, 6)]
-                    mid = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(6, 13)]
-                    right = [env.grid.get(x, y) for y in range(env.grid.height) for x in range(13, 20)]
-                    doom_feed.add('patch', f"Stocks L/M/R: {statistics.mean(left):.1f}/{statistics.mean(mid):.1f}/{statistics.mean(right):.1f}", 1)
+                    from genesis.stream import doom_feed
+                    events = doom_feed.events  # direct access is fine here
+                    start = int(getattr(runtime, '_last_feed_index', 0))
+                    if start < 0 or start > len(events):
+                        start = 0
+                    for evt in events[start:]:
+                        if evt.get('tag') == 'chatter':
+                            msg = evt.get('message', '')
+                            if msg:
+                                # Append only if not a consecutive duplicate
+                                if not runtime.chatter_recent or runtime.chatter_recent[-1] != msg:
+                                    runtime.chatter_recent.append(msg)
+                                    if len(runtime.chatter_recent) > 50:
+                                        runtime.chatter_recent = runtime.chatter_recent[-50:]
+                    runtime._last_feed_index = len(events)
                 except Exception:
                     pass
+                _time.sleep(0.5)
 
-            _time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\n🛑 Stopped simple-rule environment.")
-        raise SystemExit(0)
-    except Exception:
-        # Fallback to previous real-data main loop below if the environment import fails
-        pass
+        t = _th.Thread(target=_loop, daemon=True)
+        t.start()
+
+        # Start HTTP server that reports DataEcosystem + runtime stats
+        app = create_app(eco, runtime)
+
+        import signal as _sig
+
+        def _graceful_shutdown(*_args):
+            _stop_flag.set()
+            try:
+                eco.stop()
+            except Exception:
+                pass
+            raise SystemExit(0)
+
+        _sig.signal(_sig.SIGTERM, _graceful_shutdown)
+        _sig.signal(_sig.SIGINT, _graceful_shutdown)
+
+        port = int(_os.getenv('PORT', '8080'))
+        host = _os.getenv('HOST', '0.0.0.0')
+        app.run(host=host, port=port, debug=False, use_reloader=False)
     
     # Import data ecosystem
     import sys

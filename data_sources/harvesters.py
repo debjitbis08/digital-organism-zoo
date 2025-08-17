@@ -109,11 +109,13 @@ class RSSFeedHarvester:
 class FileSystemHarvester(FileSystemEventHandler):
     """Harvests data from file system changes"""
     
-    def __init__(self, watch_paths: List[str]):
+    def __init__(self, watch_paths: List[str], *, chunk_size: int = 4096, max_chunks: int = 500):
         super().__init__()
         self.watch_paths = watch_paths
         self.observer = Observer()
         self.harvested_morsels = []
+        self.chunk_size = max(512, int(chunk_size))
+        self.max_chunks = max(1, int(max_chunks))
         self.file_extensions = {
             '.txt': DataType.SIMPLE_TEXT,
             '.json': DataType.STRUCTURED_JSON,
@@ -152,9 +154,9 @@ class FileSystemHarvester(FileSystemEventHandler):
             extension = path.suffix.lower()
             
             if extension in self.file_extensions:
-                # Read file content (with size limit)
+                # Read file content and chunk into multiple morsels
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(10000)  # Limit to 10KB
+                    content = f.read()
                 
                 data_type = self.file_extensions[extension]
                 
@@ -165,19 +167,33 @@ class FileSystemHarvester(FileSystemEventHandler):
                     DataType.XML_DATA: 10,
                     DataType.CODE: 25
                 }.get(data_type, 5)
-                
-                morsel = DataMorsel(
-                    data_type=data_type,
-                    content=content,
-                    size=len(content),
-                    source=f"File:{path.name}",
-                    timestamp=time.time(),
-                    energy_value=base_energy,
-                    difficulty=2 if data_type == DataType.CODE else 1
-                )
-                
-                self.harvested_morsels.append(morsel)
-                print(f"📁 Harvested {data_type.value} from {path.name} ({event_type})")
+                # Chunking
+                chunks = []
+                total_len = len(content)
+                if total_len == 0:
+                    return
+                # Limit number of chunks to avoid explosion
+                max_chunks = max(1, self.max_chunks)
+                step = max(self.chunk_size, 1)
+                i = 0
+                while i < total_len and len(chunks) < max_chunks:
+                    piece = content[i:i+step]
+                    i += step
+                    # Scale energy with chunk size (sublinear)
+                    size = len(piece)
+                    energy = int(max(1, base_energy * (1.0 + min(5.0, size / 2000.0))))
+                    morsel = DataMorsel(
+                        data_type=data_type,
+                        content=piece,
+                        size=size,
+                        source=f"File:{path.name}",
+                        timestamp=time.time(),
+                        energy_value=energy,
+                        difficulty=2 if data_type == DataType.CODE else 1
+                    )
+                    chunks.append(morsel)
+                self.harvested_morsels.extend(chunks)
+                print(f"📁 Harvested {len(chunks)} chunk(s) of {data_type.value} from {path.name} ({event_type})")
                 
         except Exception as e:
             print(f"File processing error for {file_path}: {e}")
@@ -209,15 +225,16 @@ class APIHarvester:
         ]
         self.request_timeout = 5
         self.last_requests = {}
+        self.min_interval = 300  # seconds per endpoint; lowered in aggressive mode via config
         
     def harvest(self) -> List[DataMorsel]:
         """Fetch data from APIs"""
         morsels = []
         
         for endpoint in self.api_endpoints:
-            # Rate limiting - max 1 request per 5 minutes per endpoint
+            # Rate limiting
             if endpoint['url'] in self.last_requests:
-                if time.time() - self.last_requests[endpoint['url']] < 300:
+                if time.time() - self.last_requests[endpoint['url']] < self.min_interval:
                     continue
                     
             try:
@@ -260,8 +277,15 @@ class DataEcosystem:
         
         # Initialize harvesters
         self.rss_harvester = RSSFeedHarvester(self.config['rss_feeds'])
-        self.file_harvester = FileSystemHarvester(self.config['watch_paths'])
+        self.file_harvester = FileSystemHarvester(self.config['watch_paths'],
+                                                 chunk_size=int(self.config.get('file_chunk_size', 4096)),
+                                                 max_chunks=int(self.config.get('file_max_chunks', 500)))
         self.api_harvester = APIHarvester()
+        # Allow aggressive API mode
+        self.api_harvester.min_interval = int(self.config.get('api_min_interval', 300))
+
+        # Optional synthetic teacher feeder
+        self.enable_synthetic_feeder = bool(self.config.get('enable_synthetic_feeder', True))
         
         # Food storage
         self.available_food = []
@@ -318,9 +342,13 @@ class DataEcosystem:
                 os.path.expanduser('~/Downloads'),
                 '/tmp'  # Temporary files
             ],
-            'harvest_interval': 300,  # 5 minutes
+            'harvest_interval': 60,  # default to 60s; override at runtime
             'max_food_storage': 1000,
-            'scarcity_threshold': 100
+            'scarcity_threshold': 100,
+            'enable_synthetic_feeder': True,
+            'file_chunk_size': 4096,
+            'file_max_chunks': 500,
+            'api_min_interval': 120
         }
     
     def _harvest_loop(self):
@@ -363,6 +391,14 @@ class DataEcosystem:
                 
                 # Remove completely stale food
                 self.available_food = [m for m in self.available_food if m.freshness > 0.1]
+
+                # Synthetic teacher feeder under scarcity
+                if self.enable_synthetic_feeder and len(self.available_food) < (self.config['scarcity_threshold'] // 2):
+                    deficit = int(self.config.get('scarcity_threshold', 100)) - len(self.available_food)
+                    synth = self._generate_synthetic_food(n=min(20, max(5, deficit)))
+                    if synth:
+                        self.available_food.extend(synth)
+                        print(f"🧠 Teacher feeder added {len(synth)} synthetic morsels. Total food: {len(self.available_food)}")
                 
                 if new_morsels:
                     print(f"🍽️  Harvested {len(new_morsels)} new morsels. "
@@ -424,14 +460,7 @@ class DataEcosystem:
 
         suitable_food.sort(key=score, reverse=True)
         
-        # Apply scarcity - organism might not find food if scarce
-        if self.food_scarcity < 0.5 and len(suitable_food) > 0:
-            # Only give food sometimes when scarce
-            import random
-            if random.random() > self.food_scarcity:
-                return None
-        
-        # Return best food item
+        # Return best food item deterministically if available
         if suitable_food:
             chosen_morsel = suitable_food[0]
             self.available_food.remove(chosen_morsel)
@@ -471,6 +500,42 @@ class DataEcosystem:
         self.file_harvester.stop_watching()
         if self.harvest_thread.is_alive():
             self.harvest_thread.join(timeout=5)
+
+    # ----------------- Synthetic feeder -----------------
+    def _generate_synthetic_food(self, n: int = 10) -> List[DataMorsel]:
+        """Generate simple, diverse facts as emergency food.
+
+        Keeps items small and varied to exercise different pathways while
+        providing enough quantity for organisms to forage in scarcity.
+        """
+        n = max(1, int(n))
+        facts = [
+            "The Earth revolves around the Sun.",
+            "Water boils at 100°C at sea level.",
+            "Python lists are mutable; tuples are immutable.",
+            "JSON stands for JavaScript Object Notation.",
+            "XML uses tags to structure data.",
+            "APIs allow different software systems to communicate.",
+            "Sorting algorithms include quicksort and mergesort.",
+            "RSS feeds syndicate updates from websites.",
+            "HTTP status 200 means OK.",
+            "A byte is 8 bits.",
+        ]
+        out: List[DataMorsel] = []
+        for i in range(n):
+            txt = facts[i % len(facts)]
+            dt = DataType.SIMPLE_TEXT if i % 3 != 0 else DataType.XML_DATA
+            energy = 5 if dt == DataType.SIMPLE_TEXT else 10
+            out.append(DataMorsel(
+                data_type=dt,
+                content=txt,
+                size=len(txt),
+                source="Teacher:Facts",
+                timestamp=time.time(),
+                energy_value=energy,
+                difficulty=1 if dt == DataType.SIMPLE_TEXT else 2
+            ))
+        return out
 
 # Example usage and testing
 if __name__ == "__main__":

@@ -32,13 +32,16 @@ Digital organisms that:
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the ecosystem
-# Default: simple-rule environmental substrate (Task 10)
+# Run the ecosystem (internet-backed by default)
 python genesis/evolution.py
 
-# Watch organisms survive via local patch foraging, signaling, and reproduction.
-# The previous real-data ecosystem remains available via the DataEcosystem
-# class (used in tests and utilities).
+# Endpoints:
+#   /           -> small status
+#   /health     -> health JSON (includes tick snapshot)
+#   /stats      -> combined DataEcosystem + runtime stats
+
+# To run the simple local grid instead (no internet):
+# RUN_MODE=simple python genesis/evolution.py
 ```
 
 ### Persistence backend
