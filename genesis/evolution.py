@@ -2681,24 +2681,30 @@ if __name__ == "__main__":
         print("📡 Starting DataEcosystem with HTTP endpoints (/:, /health, /stats)...")
         # Ensure package root is on sys.path when running as a script
         try:
-            from genesis.ecosystem import create_app, RuntimeManager  # type: ignore
+            from genesis.ecosystem import create_app, RuntimeManager, build_config_from_env  # type: ignore
         except Exception:
             import sys as _sys, os as _os
             _sys.path.append(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-            from genesis.ecosystem import create_app, RuntimeManager  # type: ignore
+            from genesis.ecosystem import create_app, RuntimeManager, build_config_from_env  # type: ignore
 
         # Build ecosystem and start organisms in a background loop
         from data_sources.harvesters import DataEcosystem
         from genesis.nutrition import create_enhanced_nutrition_system
         from genesis.parent_care import ActiveParentCareSystem
 
-        eco = DataEcosystem({
+        _base_cfg = {
             'rss_feeds': ['https://hnrss.org/frontpage'],
             'watch_paths': ['/tmp'],
             'harvest_interval': int(_os.getenv('HARVEST_INTERVAL', '10')),
             'max_food_storage': int(_os.getenv('MAX_FOOD_STORAGE', '300')),
             'scarcity_threshold': 80,
-        })
+        }
+        try:
+            _env_cfg = build_config_from_env()
+            _base_cfg.update(_env_cfg)
+        except Exception:
+            pass
+        eco = DataEcosystem(_base_cfg)
 
         runtime = RuntimeManager()
 
@@ -2807,16 +2813,25 @@ if __name__ == "__main__":
         from genesis.code_evolution import create_code_evolution_system
         from genesis.persistence import create_persistence_system, auto_save_organisms
         from genesis.llm_teacher import create_llm_teacher_system, enhance_parent_care_with_llm
+        try:
+            from genesis.ecosystem import build_config_from_env as _build_cfg
+        except Exception:
+            _build_cfg = lambda: {}
         
         # Create real data ecosystem
         print("📡 Creating data ecosystem...")
-        data_ecosystem = DataEcosystem({
+        _cfg = {
             'rss_feeds': ['https://hnrss.org/frontpage'],  # Hacker News feed
             'watch_paths': ['/tmp'],  # Monitor /tmp for file changes
             'harvest_interval': 15,   # Harvest every 15 seconds (more frequent)
             'max_food_storage': 100,  # Larger storage
             'scarcity_threshold': 50  # Higher threshold before scarcity
-        })
+        }
+        try:
+            _cfg.update(_build_cfg())
+        except Exception:
+            pass
+        data_ecosystem = DataEcosystem(_cfg)
         
         # Create enhanced nutrition system
         print("🧬 Creating enhanced nutrition system...")
@@ -3067,6 +3082,10 @@ def run_indefinite_zoo(config: dict = None):
         from genesis.code_evolution import create_code_evolution_system
         from genesis.persistence import create_persistence_system, auto_save_organisms
         from genesis.llm_teacher import create_llm_teacher_system, enhance_parent_care_with_llm
+        try:
+            from genesis.ecosystem import build_config_from_env as _build_cfg
+        except Exception:
+            _build_cfg = lambda: {}
         
         # Create real data ecosystem (with lightweight config if specified)
         print("📡 Creating data ecosystem...")
@@ -3077,6 +3096,12 @@ def run_indefinite_zoo(config: dict = None):
             'max_food_storage': 200,  # Larger storage for slower consumption
             'scarcity_threshold': 100  # Higher threshold for abundance
         })
+        # Apply environment overrides consistently
+        try:
+            env_overrides = _build_cfg()
+            data_config.update(env_overrides)
+        except Exception:
+            pass
         
         if config.get('lightweight_mode'):
             print("⚡ Lightweight mode enabled - optimized for resource-constrained hardware")

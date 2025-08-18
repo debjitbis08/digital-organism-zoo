@@ -38,6 +38,18 @@ def build_config_from_env() -> Dict[str, Any]:
             cfg['max_food_storage'] = max(100, int(mfs))
         except Exception:
             pass
+    # Optional: comma-separated RSS feed URLs
+    rss = os.getenv('RSS_FEEDS')
+    if rss:
+        urls = [u.strip() for u in rss.split(',') if u.strip()]
+        if urls:
+            cfg['rss_feeds'] = urls
+    # Optional: comma-separated web page URLs for simple HTML harvesting
+    wp = os.getenv('WEB_PAGES')
+    if wp:
+        urls = [u.strip() for u in wp.split(',') if u.strip()]
+        if urls:
+            cfg['web_pages'] = urls
     return cfg
 
 

@@ -41,7 +41,11 @@ def start_evolution_runtime() -> None:
         if _evolution_started:
             return
         try:
-            from genesis.ecosystem import create_app as _create_eco_app, RuntimeManager as _RuntimeManager
+            from genesis.ecosystem import (
+                create_app as _create_eco_app,
+                RuntimeManager as _RuntimeManager,
+                build_config_from_env as _build_cfg,
+            )
             from data_sources.harvesters import DataEcosystem as _DataEcosystem
             from genesis.nutrition import create_enhanced_nutrition_system as _create_nutrition
             from genesis.parent_care import ActiveParentCareSystem as _ParentCare
@@ -52,13 +56,17 @@ def start_evolution_runtime() -> None:
 
             doom_feed.add('system', 'starting evolution runtime (mounted at /eco)', 1)
 
-            eco = _DataEcosystem({
+            # Base config with reasonable defaults; allow env to override
+            _cfg = {
                 'rss_feeds': ['https://hnrss.org/frontpage'],
                 'watch_paths': ['/tmp'],
                 'harvest_interval': 10,
                 'max_food_storage': 300,
                 'scarcity_threshold': 80,
-            })
+            }
+            _env_cfg = _build_cfg()
+            _cfg.update(_env_cfg)
+            eco = _DataEcosystem(_cfg)
 
             runtime = _RuntimeManager()
             # Persistence system and state restoration

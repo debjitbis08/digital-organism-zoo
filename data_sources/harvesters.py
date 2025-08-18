@@ -15,6 +15,7 @@ import hashlib
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 
 class DataType(Enum):
     """Types of data that organisms can consume"""
@@ -267,6 +268,81 @@ class APIHarvester:
                 
         return morsels
 
+class WebPageHarvester:
+    """Harvests data by fetching and cleaning configured web pages.
+
+    This is a simple, keyless alternative to full web search. It fetches a set
+    of seed URLs and extracts readable text from HTML using BeautifulSoup. The
+    content is chunked to keep morsels small and digestible.
+
+    Notes:
+    - Network failures are tolerated and logged without raising.
+    - By default, this harvester is disabled (no URLs in default config).
+    """
+
+    def __init__(self, urls: List[str], *, timeout: int = 6, max_chars: int = 2400, chunk_chars: int = 800):
+        self.urls = list(urls or [])
+        self.timeout = max(1, int(timeout))
+        self.max_chars = max(200, int(max_chars))
+        self.chunk_chars = max(200, int(chunk_chars))
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': 'DigitalOrganismZoo/1.0'})
+        # Keep minimal cache of last etags to avoid waste (best effort)
+        self._last_etag: Dict[str, str] = {}
+        self._last_modified: Dict[str, str] = {}
+
+    def _clean_html(self, html: str) -> str:
+        soup = BeautifulSoup(html, 'html.parser')
+        for tag in soup(['script', 'style', 'noscript']):
+            tag.decompose()
+        # Prefer article-like content if present
+        article = soup.find('article')
+        text_container = article if article else soup.body or soup
+        text = ' '.join(p.get_text(separator=' ', strip=True) for p in text_container.find_all(['p', 'li', 'h1', 'h2', 'h3']))
+        text = ' '.join(text.split())
+        return text[: self.max_chars]
+
+    def harvest(self) -> List[DataMorsel]:
+        morsels: List[DataMorsel] = []
+        for url in self.urls:
+            try:
+                headers = {}
+                if url in self._last_etag:
+                    headers['If-None-Match'] = self._last_etag[url]
+                if url in self._last_modified:
+                    headers['If-Modified-Since'] = self._last_modified[url]
+                resp = self.session.get(url, timeout=self.timeout, headers=headers)
+                if resp.status_code == 304:
+                    continue
+                if resp.status_code != 200 or 'text/html' not in resp.headers.get('Content-Type', ''):
+                    continue
+                etag = resp.headers.get('ETag')
+                last_mod = resp.headers.get('Last-Modified')
+                if etag:
+                    self._last_etag[url] = etag
+                if last_mod:
+                    self._last_modified[url] = last_mod
+                text = self._clean_html(resp.text)
+                if not text:
+                    continue
+                # Chunk into morsels
+                for i in range(0, len(text), self.chunk_chars):
+                    piece = text[i:i + self.chunk_chars]
+                    energy = int(6 + min(24, len(piece) // 300))
+                    morsels.append(DataMorsel(
+                        data_type=DataType.SIMPLE_TEXT,
+                        content=piece,
+                        size=len(piece),
+                        source=f"Web:{url}",
+                        timestamp=time.time(),
+                        energy_value=energy,
+                        difficulty=1
+                    ))
+                print(f"🕸️  Harvested {len(morsels)} chunk(s) from {url}")
+            except Exception as e:
+                print(f"Web harvest error for {url}: {e}")
+        return morsels
+
 class DataEcosystem:
     """Manages all data sources and provides unified feeding interface"""
     
@@ -285,12 +361,19 @@ class DataEcosystem:
         # Allow aggressive API mode
         self.api_harvester.min_interval = int(self.config.get('api_min_interval', 300))
 
+        # Optional simple web page harvester
+        self.web_harvester = WebPageHarvester(self.config.get('web_pages', []),
+                                              timeout=int(self.config.get('web_timeout', 6)),
+                                              max_chars=int(self.config.get('web_max_chars', 2400)),
+                                              chunk_chars=int(self.config.get('web_chunk_chars', 800)))
+
         # Optional synthetic teacher feeder
         self.enable_synthetic_feeder = bool(self.config.get('enable_synthetic_feeder', True))
         
         # Food storage
         self.available_food = []
         self.consumed_food = []
+        self._seen_hashes = set()  # simple content-based dedup guard
         self.food_scarcity = 1.0  # 1.0 = abundant, 0.0 = scarce
 
         # Virtual regions: lightweight habitat biases for migration experiments
@@ -349,7 +432,12 @@ class DataEcosystem:
             'enable_synthetic_feeder': True,
             'file_chunk_size': 4096,
             'file_max_chunks': 500,
-            'api_min_interval': 120
+            'api_min_interval': 120,
+            # Web harvester defaults to disabled; set URLs to enable
+            'web_pages': [],
+            'web_timeout': 6,
+            'web_max_chars': 2400,
+            'web_chunk_chars': 800,
         }
     
     def _harvest_loop(self):
@@ -368,9 +456,18 @@ class DataEcosystem:
                 # APIs (less frequent)
                 if time.time() % 600 < 10:  # Every 10 minutes
                     new_morsels.extend(self.api_harvester.harvest())
+                # Web pages (medium cadence)
+                if self.web_harvester.urls and time.time() % 300 < 10:  # ~Every 5 minutes
+                    new_morsels.extend(self.web_harvester.harvest())
                 
-                # Add to food storage
-                self.available_food.extend(new_morsels)
+                # Add to food storage with content-based dedup
+                if new_morsels:
+                    for m in new_morsels:
+                        h = hashlib.md5(m.content.encode('utf-8')).hexdigest()
+                        if h in self._seen_hashes:
+                            continue
+                        self._seen_hashes.add(h)
+                        self.available_food.append(m)
                 
                 # Manage food storage size
                 if len(self.available_food) > self.config['max_food_storage']:

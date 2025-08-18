@@ -21,6 +21,12 @@ except Exception:
     trade_board = None
     Capability = None
 
+try:
+    # Emergent lexicon naming game for dialect convergence
+    from genesis.lexicon import naming_game as _naming_game
+except Exception:
+    _naming_game = None
+
 
 def run_region_interactions(organisms: List, ecosystem_stats: Dict[str, Any]) -> Dict[str, Any]:
     """Process simple region-local interactions between organisms.
@@ -166,6 +172,32 @@ def run_region_interactions(organisms: List, ecosystem_stats: Dict[str, Any]) ->
                 except Exception:
                     pass
 
+                # Language emergence: run a small naming game round on salient concepts
+                try:
+                    if _naming_game and getattr(t, 'lexicon', None) and getattr(student, 'lexicon', None):
+                        # Use teacher's last digestion top acts to derive concepts
+                        top = None
+                        try:
+                            top = (getattr(t, 'last_digestion', None) or {}).get('top')
+                        except Exception:
+                            top = None
+                        concepts = []
+                        if top:
+                            def _bucket(v: float) -> str:
+                                return 'low' if v < 0.33 else ('mid' if v < 0.66 else 'high')
+                            for a, v in top[:2]:
+                                concepts.append(f"{a}:{_bucket(float(v))}")
+                        # Fallback: align on social if no digestion context
+                        if not concepts:
+                            drv = getattr(t, '_brain_drives', {}) or {}
+                            s = float(drv.get('social', 0.0))
+                            bucket = 'low' if s < 0.33 else ('mid' if s < 0.66 else 'high')
+                            concepts = [f"social:{bucket}"]
+                        for cid in concepts:
+                            _naming_game(getattr(t, 'lexicon'), getattr(student, 'lexicon'), cid)
+                except Exception:
+                    pass
+
         # Trade: share best local lead from recent memories
         for o in group:
             if trade_board is None:
@@ -197,6 +229,22 @@ def run_region_interactions(organisms: List, ecosystem_stats: Dict[str, Any]) ->
                     pass
             except Exception:
                 pass
+
+        # Occasional spontaneous alignment within region based on social drive
+        try:
+            if _naming_game and len(group) >= 2:
+                # Pair two random organisms to align on 'social' concept bucket
+                g = list(group)
+                random.shuffle(g)
+                a = g[0]; b = g[1]
+                drv_a = getattr(a, '_brain_drives', {}) or {}
+                s = float(drv_a.get('social', 0.0))
+                bucket = 'low' if s < 0.33 else ('mid' if s < 0.66 else 'high')
+                cid = f"social:{bucket}"
+                if getattr(a, 'lexicon', None) and getattr(b, 'lexicon', None):
+                    _naming_game(a.lexicon, b.lexicon, cid)
+        except Exception:
+            pass
 
         # Low-noise per-region summary event for observability
         try:

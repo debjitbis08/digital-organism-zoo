@@ -39,6 +39,33 @@ python web_interface/server.py --demo-evolution
 # Visit: http://localhost:8000/doom
 ```
 
+### Configure web foraging (optional)
+
+The DataEcosystem can now harvest directly from configured web pages in addition to RSS, files, and simple APIs. Enable it by passing URLs via config or env:
+
+```python
+from data_sources.harvesters import DataEcosystem
+
+eco = DataEcosystem({
+    'web_pages': [
+        'https://www.bbc.com/news',
+        'https://news.ycombinator.com/',
+    ],
+    'harvest_interval': 30,           # seconds between harvest cycles
+    'enable_synthetic_feeder': False  # reduce reliance on teacher when the web is on
+})
+```
+
+Config keys: web_pages, web_timeout, web_max_chars, web_chunk_chars, api_min_interval, file_chunk_size, file_max_chunks.
+
+You can also set URLs via environment variables when using genesis/ecosystem.py or the web server:
+
+```bash
+export RSS_FEEDS="https://hnrss.org/frontpage,https://feeds.bbci.co.uk/news/rss.xml"
+export WEB_PAGES="https://www.bbc.com/news,https://news.ycombinator.com/"
+python genesis/ecosystem.py
+```
+
 ## Persistence
 
 By default, organism state is stored as JSON under organism_saves/.
