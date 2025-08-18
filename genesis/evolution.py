@@ -2440,25 +2440,43 @@ class Organism:
         
         # Create child
         child = Organism(offspring_genome['generation'], offspring_genome)
-        # Inherit and grow brain only in child
+        # Inherit brain via recombination when possible (Task 8.1)
         try:
             from genesis.brain import BrainGenome, Brain
-            # Copy one parent's brain genome (choose fitter parent)
-            parent_src = self if getattr(self, 'current_fitness', 0.0) >= getattr(mate, 'current_fitness', 0.0) else mate
-            pg = getattr(parent_src, 'brain_genome', None)
-            if pg and hasattr(pg, 'to_dict'):
-                cloned = BrainGenome.from_dict(pg.to_dict())
-                # Growth step: increase hidden size by +1 and rebuild
-                cloned.mutate()  # our mutate is growth-biased (+1 hidden) with no cap
-                child.brain_genome = cloned
-                child.brain = Brain(cloned)
+            pg_a = getattr(self, 'brain_genome', None)
+            pg_b = getattr(mate, 'brain_genome', None)
+            if pg_a is not None and pg_b is not None:
+                # Two-parent recombination
                 try:
-                    from genesis.stream import doom_feed
-                    hid = cloned.data.get('topology', {}).get('hid')
-                    doom_feed.add('brain_grow', f"Child {child.id} brain grew (hid={hid})", 1,
-                                  {'parent_a': self.id, 'parent_b': mate.id})
+                    recombined = BrainGenome.recombine(pg_a, pg_b)
+                    child.brain_genome = recombined
+                    child.brain = Brain(recombined)
+                    try:
+                        from genesis.stream import doom_feed
+                        topo = recombined.data.get('topology', {})
+                        doom_feed.add('recombine_brain',
+                                      f"{child.id} brain I/H/O=({topo.get('in')},{topo.get('hid')},{topo.get('out')})",
+                                      1,
+                                      {'parent_a': self.id, 'parent_b': mate.id, 'organism': child.id})
+                    except Exception:
+                        pass
                 except Exception:
-                    pass
+                    # Fallback to one-parent clone + mutate
+                    parent_src = self if getattr(self, 'current_fitness', 0.0) >= getattr(mate, 'current_fitness', 0.0) else mate
+                    pg = getattr(parent_src, 'brain_genome', None)
+                    if pg and hasattr(pg, 'to_dict'):
+                        cloned = BrainGenome.from_dict(pg.to_dict())
+                        cloned.mutate()
+                        child.brain_genome = cloned
+                        child.brain = Brain(cloned)
+            else:
+                # Fallback path when only one has a genome
+                parent_src = pg_a if pg_a is not None else pg_b
+                if parent_src is not None:
+                    cloned = BrainGenome.from_dict(parent_src.to_dict())
+                    cloned.mutate()
+                    child.brain_genome = cloned
+                    child.brain = Brain(cloned)
         except Exception:
             pass
         # Inherit and mutate body parts (limbs)

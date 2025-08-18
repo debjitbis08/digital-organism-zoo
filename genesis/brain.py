@@ -18,7 +18,7 @@ Future work (kept small on purpose):
 """
 
 import random
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Allowed sensor/actuator genes
 # Keep the base set small and evolvable, but include several
@@ -157,6 +157,163 @@ class BrainGenome:
         perturb_vector(self.data.get('b1', []))
         perturb_matrix(self.data.get('w2', []))
         perturb_vector(self.data.get('b2', []))
+
+    # --------- Task 8: two-parent recombination for brain genome ---------
+    @staticmethod
+    def recombine(mom: 'BrainGenome', dad: 'BrainGenome', rng: Optional[random.Random] = None) -> 'BrainGenome':
+        """Recombine two parent genomes into a child genome.
+
+        Policy:
+        - Sensors/actuators: merge with order preservation up to max parent dims
+        - Hidden units: average of parents (rounded), at least 3
+        - Weights/biases: average where indices overlap, otherwise copy from one parent,
+          and random-initialize for new rows/cols. Small noise added for diversity.
+        """
+        r = rng or random
+        m = mom.data or {}
+        d = dad.data or {}
+
+        # Topologies
+        mt = m.get('topology', {})
+        dt = d.get('topology', {})
+        m_in, m_hid, m_out = int(mt.get('in', 6)), int(mt.get('hid', 6)), int(mt.get('out', 3))
+        d_in, d_hid, d_out = int(dt.get('in', 6)), int(dt.get('hid', 6)), int(dt.get('out', 3))
+
+        # Sensors/actuators: merge up to max parent dims to avoid sudden bloat
+        ms = list(m.get('sensors', list(DEFAULT_SENSORS)))
+        ds = list(d.get('sensors', list(DEFAULT_SENSORS)))
+        ma = list(m.get('actuators', list(DEFAULT_ACTUATORS)))
+        da = list(d.get('actuators', list(DEFAULT_ACTUATORS)))
+
+        def merge_preserve(a: List[str], b: List[str], limit: int) -> List[str]:
+            seen = set()
+            out: List[str] = []
+            for x in a + b:
+                if x in seen:
+                    continue
+                seen.add(x)
+                out.append(x)
+                if len(out) >= limit:
+                    break
+            # If we still need more to reach the limit, pad from defaults
+            defaults = DEFAULT_SENSORS if a is ms else DEFAULT_ACTUATORS
+            for x in defaults:
+                if len(out) >= limit:
+                    break
+                if x not in seen:
+                    out.append(x)
+            return out[:limit]
+
+        new_in = max(m_in, d_in)
+        new_out = max(m_out, d_out)
+        sensors = merge_preserve(ms, ds, new_in)
+        actuators = merge_preserve(ma, da, new_out)
+
+        # Hidden size: rounded average with a minimum
+        new_hid = max(3, int(round((m_hid + d_hid) / 2)))
+
+        # Helper generators
+        def rand_row(n: int) -> List[float]:
+            return [r.uniform(-1.0, 1.0) for _ in range(n)]
+        def rand_bias(n: int) -> List[float]:
+            return [r.uniform(-0.1, 0.1) for _ in range(n)]
+
+        # Parent matrices
+        mw1 = m.get('w1', [])
+        mb1 = m.get('b1', [])
+        mw2 = m.get('w2', [])
+        mb2 = m.get('b2', [])
+        dw1 = d.get('w1', [])
+        db1 = d.get('b1', [])
+        dw2 = d.get('w2', [])
+        db2 = d.get('b2', [])
+
+        # Build child matrices with overlap averaging
+        child_w1: List[List[float]] = []
+        min_in = min(new_in, len(mw1), len(dw1))
+        min_hid_w1 = min(new_hid, len(mw1[0]) if mw1 else 0, len(dw1[0]) if dw1 else 0)
+        for i in range(new_in):
+            row: List[float] = []
+            for j in range(new_hid):
+                val: float
+                if i < len(mw1) and j < (len(mw1[i]) if mw1 and i < len(mw1) else 0) and 
+                   i < len(dw1) and j < (len(dw1[i]) if dw1 and i < len(dw1) else 0):
+                    val = 0.5 * (mw1[i][j] + dw1[i][j])
+                elif i < len(mw1) and j < (len(mw1[i]) if mw1 and i < len(mw1) else 0):
+                    val = mw1[i][j]
+                elif i < len(dw1) and j < (len(dw1[i]) if dw1 and i < len(dw1) else 0):
+                    val = dw1[i][j]
+                else:
+                    val = r.uniform(-1.0, 1.0)
+                row.append(val)
+            child_w1.append(row)
+
+        child_b1: List[float] = []
+        for j in range(new_hid):
+            if j < len(mb1) and j < len(db1):
+                child_b1.append(0.5 * (mb1[j] + db1[j]))
+            elif j < len(mb1):
+                child_b1.append(mb1[j])
+            elif j < len(db1):
+                child_b1.append(db1[j])
+            else:
+                child_b1.append(r.uniform(-0.1, 0.1))
+
+        child_w2: List[List[float]] = []
+        for j in range(new_hid):
+            row: List[float] = []
+            mw2_row = mw2[j] if j < len(mw2) else []
+            dw2_row = dw2[j] if j < len(dw2) else []
+            for k in range(new_out):
+                if k < len(mw2_row) and k < len(dw2_row):
+                    row.append(0.5 * (mw2_row[k] + dw2_row[k]))
+                elif k < len(mw2_row):
+                    row.append(mw2_row[k])
+                elif k < len(dw2_row):
+                    row.append(dw2_row[k])
+                else:
+                    row.append(r.uniform(-1.0, 1.0))
+            child_w2.append(row)
+
+        child_b2: List[float] = []
+        for k in range(new_out):
+            if k < len(mb2) and k < len(db2):
+                child_b2.append(0.5 * (mb2[k] + db2[k]))
+            elif k < len(mb2):
+                child_b2.append(mb2[k])
+            elif k < len(db2):
+                child_b2.append(db2[k])
+            else:
+                child_b2.append(r.uniform(-0.1, 0.1))
+
+        child = {
+            'topology': {'in': new_in, 'hid': new_hid, 'out': new_out},
+            'w1': child_w1,
+            'b1': child_b1,
+            'w2': child_w2,
+            'b2': child_b2,
+            'activation': m.get('activation', 'relu'),
+            'sensors': sensors,
+            'actuators': actuators,
+        }
+
+        # Small noise to encourage diversity
+        def jitter_matrix(mtx: List[List[float]], scale=0.02, rate=0.1):
+            for r_i in range(len(mtx)):
+                for c_i in range(len(mtx[r_i])):
+                    if r.random() < rate:
+                        mtx[r_i][c_i] += r.uniform(-scale, scale)
+        def jitter_vector(vec: List[float], scale=0.01, rate=0.1):
+            for i in range(len(vec)):
+                if r.random() < rate:
+                    vec[i] += r.uniform(-scale, scale)
+
+        jitter_matrix(child['w1'])
+        jitter_vector(child['b1'])
+        jitter_matrix(child['w2'])
+        jitter_vector(child['b2'])
+
+        return BrainGenome(data=child)
 
     def _resize_hidden(self, new_hid: int):
         """Resize hidden layer while preserving as much structure as possible."""

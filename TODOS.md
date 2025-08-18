@@ -148,8 +148,36 @@ Notes
 
 ### 🟡 Task 8: Genetic Recombination During Reproduction
 
-File: genesis/evolution.py
-Status: TODO
+File: genesis/evolution.py, genesis/brain.py, genesis/body_parts.py, genesis/persistence.py
+Status: TODO (subtasks below)
+
+Subtasks
+
+- 8.1 Brain genome recombination (two-parent):
+  - Add BrainGenome.recombine(mom, dad, rng=None)
+  - Reconcile sensors/actuators lists and topology (in/hid/out)
+  - Combine weights/biases via averaging or uniform crossover; random init for new dims
+  - Wire Organism.reproduce() to use recombination when both parents have a brain genome
+  - Emit low-noise doom_feed event (recombine_brain)
+
+- 8.2 Body genome recombination (two-parent):
+  - Add BodyPartGenome.recombine(mom, dad, rng=None, max_parts=…)
+  - Merge part sets with slot/duplicate handling; recombine levels; small mutation
+  - Wire Organism.reproduce() to use body recombination when available
+  - Emit low-noise doom_feed event (recombine_body)
+
+- 8.3 Persistence updates for body genome:
+  - Save/load body_genome alongside brain_genome in OrganismPersistence
+  - Backward-compatible: optional fields
+
+- 8.4 Observability:
+  - Structured doom_feed events for recombination summaries (parent contributions, dims, parts merged)
+
+- 8.5 Tests:
+  - Recombination of brain: sensors/actuators merging, topology reconciliation, weight blend
+  - Recombination of body parts and phenotype rebuild
+  - Persistence round-trip for body_genome
+  - Reproduction invariants (energy cost, offspring_count) remain intact
 
 ### ✅ Task 9: Code Self-Modification Framework
 
